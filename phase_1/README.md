@@ -28,7 +28,7 @@ docker build -t phase1-check phase_1
 Then run after first build or after editing:
 
 ```
-docker run --rm -v "$PWD/phase_1/submission:/work/submission" phase1-check
+docker run --rm -v "$PWD/phase_1/submission:/work/submission" phase_1-check:latest
 ```
 
 ## Run it without Docker
