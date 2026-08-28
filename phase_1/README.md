@@ -1,3 +1,7 @@
+# Phase 1 Documentation
+
+You will find the documentation and problem descriptions for phase one in `phase_1/documentation/phase_1.pdf`
+
 # Phase 1 self-check
 
 This docker file exists to aid students in validating their phase 1 results before submitting for a grade.
