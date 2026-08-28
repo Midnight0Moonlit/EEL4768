@@ -3,9 +3,13 @@
 You will find the documentation and problem descriptions for phase one in `phase_1/documentation/phase_1.pdf`. Be sure to **read all pages** of the PDF. There are two parts to this phase, that break down as follows.
 
 1. RISC-V Assembly
+
     1.1 Multiplication
+
     1.2 General Matrix Multiplication
+
     1.3 Sobel Filter
+    
 2. RISC-V Assembler
 
 # Phase 1 self-check
