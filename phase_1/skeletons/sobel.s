@@ -18,3 +18,13 @@ c:      .word 0, 0, 0
 .globl main
 
 main:
+# Part 1: storing the 3x3 matrix
+        lw t0, 0(a0) # (0,0)
+        lw t1, 4(a0) # (0,1)
+
+#Part 2: doing multiplication and such
+
+#PArt 3: Storing the matrix into c
+
+#Part 4: repeat
+        ecall
