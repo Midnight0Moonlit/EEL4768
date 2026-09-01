@@ -58,19 +58,91 @@ xloop:
 yloop:
         bge t1, s4, xloop_done # Basically the i < 3 rule
         addi t2, zero, 0 # kx iteration
+        addi t3, zero, 0 # initialize/ set gx to zero
+        addi t4, zero, 0 # initialize/ set gy to zero
 
 kxloop:
         bge t2, s4, yloop_done # Basically the i < 3 rule
-        addi t3, zero, 0 # ky iteration
+        addi t5, zero, 0 # ky iteration
 
 kyloop:
-        bge t3, s4, kxloop_done # Basically the i < 3 rule
+        bge t5, s4, kxloop_done # Basically the i < 3 rule
 
         # We start arithmetic down low
-        # gx += A[i + ki][j + kj] * Gx[ki][kj];
-        # gy += A[i + ki][j + kj] * Gy[ki][kj];
 
-        addi t3, t3, 1 # ky++
+        add t6, t0, t2 # x + kx/ Row for A
+        add s5, t1, t5 # y + ky/ Column for A
+
+        # Multiplying for offset A
+        slli a0, t6, 2 # Shifts by 2 bits to the left to multiply by 4
+        add a0, a0, t6 # Adds (x + kx) so a0 can be equal to (x + kx) * 5[]
+        add a0, a0, s5 # Adds column to the mix in order to get the exact Index
+        slli a0, a0, 2 # Shifts the bit by 2 in order to multiply by 4; for byte offset
+        add a0, s0, a0 # Adds the byte offset in the matrix A, which should start as 0
+        lw a1, 0(a0) # loads the index based on the byte offset into the a1 variable
+
+        # Multiplying for offsets GX and GY
+        slli a2, t2, 1 # Shifts by 1 bit to the left to multiply kx by 2
+        add a2, a2, t2 # Adds  kx so a2 can be equal to kx * 3
+        add a2, a2, t5 # Adds column (ky) to the mix in order to get the exact index
+        slli a2, a2, 2 # Shifts the bit by 2 in order to multiply by 4; for byte offset
+
+        # Loading GX
+        add a0, s1, a2 # Adds the byte offset in the matrix GX, which should start as 0; loads into a0 for easier computation
+        lw a3, 0(a0) # loads the index based on the byte offset into the a3 variable
+
+        # Loading GY
+        add a0, s2, a2 # Adds the byte offset in the matrix GY, which should start as 0; loads into a0 for easier computation
+        lw a4, 0(a0) # loads the index based on the byte offset into the a3 variable
+
+        # gx_sum += A[x + kx][y + ky] * Gx[kx][ky]
+        # gy_sum += A[x + kx][y + ky] * Gy[kx][ky]
+
+        add a2, zero, a1 # Reuse a2 for gy loop
+
+        #Code from teammate that did multi.s
+        addi t6, zero, 0 # reuse t6 as gx_inc iterator
+        addi s5, zero, 32 # reuse t7 as set max 32 bits
+        addi s6, zero, 0 # gy_inc iterator
+
+# Use bit shift and loop through 32 bits
+inc_gx_loop:
+        # Check if condition that no greater than 32 bits, move to next increment section if complete
+        bge t6, s5, inc_gy_loop
+
+        # current Bi (Gx)
+        andi a5, a3, 1
+
+        beq a5, zero, gx_skip # skip if Bi is 0, optimization encouraged by Claude
+
+        add t3, t3, a1 # gx_sum += (A << i)
+
+gx_skip:
+        slli a1, a1, 1 # shift a left for next iteration
+        srli a3, a3, 1 # shift b right so bit 0 is always next Bi, from Claude
+        addi t6, t6, 1 # increment iterator
+        jal zero, inc_gx_loop # jump back to loop
+
+inc_gy_loop:
+        # Check if condition that no greater than 32 bits, move to next increment section if complete
+        bge s6, s5, kyloop_done
+
+        # current Bi (Gx)
+        andi a6, a4, 1
+
+        beq a6, zero, gy_skip # skip if Bi is 0, optimization encouraged by Claude
+
+        add t4, t4, a2 # gx_sum += (A << i)
+
+gy_skip:
+        slli a2, a2, 1 # shift a left for next iteration
+        srli a4, a4, 1 # shift b right so bit 0 is always next Bi, from Claude
+        addi s6, s6, 1 # increment iterator
+        jal zero, inc_gy_loop # jump back to loop
+
+
+kyloop_done:
+        addi t5, t5, 1 # ky++
         beq zero, zero, kyloop # starts kyloop all over again
 
 kxloop_done:
@@ -78,7 +150,25 @@ kxloop_done:
         beq zero, zero, kxloop # starts kxloop all over again
 
 yloop_done:
-        # C[i][j] = gx_sum + gy_sum
+        # C[x][y] = gx_sum + gy_sum
+        # reuses both a0 and a1 from the previous loops
+        # Using the index formula
+        slli a0, t0, 1
+        add a0, a0, t0 
+        add a0, a0, t1
+
+        # Turning entire index to offset
+        slli a0, a0, 2 # multiplies by 4
+
+        # Add C's address to turn offset into address
+        add a0, s3, a0 # turns a0 into address of C[t0][t1]
+
+        # Finally do the addition
+        add a1, t3, t4
+
+        # Store it in the indexes
+        sw a1, 0(a0)
+
         addi t1, t1, 1 # y++
         beq zero, zero, yloop
 
