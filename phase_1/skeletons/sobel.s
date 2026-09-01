@@ -32,20 +32,40 @@ main:
 
         # Base address for Matrix A
         lui s0, 0x10010 # memory layout
-        ori s0, t0 0x0000 # needed so it can point to Matrix A
+        ori s0, s0, 0x0000 # needed so it can point to Matrix A
 
-        # Base address for Matrix B
+        # Base address for Matrix gx
         lui s1, 0x10010 # memory layout
-        ori s1, t0 0x0064 # needed so it can point to Matrix B, add 100 bytes based on the 5x5 previous matrix
+        ori s1, s1, 0x0064 # needed so it can point to Matrix gx, add 100 bytes based on the 5x5 previous matrix
+
+        # Base address for Matrix gy
+        lui s2, 0x10010 # memory layout
+        ori s2, s2, 0x0088 # needed so it can point to Matrix gx, add 36 bytes based on the 3x3 previous matrix
 
         # Base address for Matrix C
-        lui s0, 0x10010 # memory layout
-        ori s0, t0 0x0088 # needed so it can point to Matrix C, add 36 bytes based on the 3x3 previous matrix
+        lui s3, 0x10010 # memory layout
+        ori s3, s3, 0x00AC # needed so it can point to Matrix gy, add 36 bytes based on the 3x3 previous matrix
+
+        addi t0, zero, 0 # x iteration
+
+        addi s4, zero, 12 # max since every single iterative maxes at 3, which is 12 bytes
 
 #Part 2: doing multiplication and such
+xloop:
+        bge t0, s4, exit # Basically the i < 3 rule
+        addi t1, zero, 0 # y iteration
 
-#PArt 3: Storing the matrix into c
+yloop:
+        bge t1, s4, xloop # Basically the i < 3 rule
+        addi t2, zero, 0 # kx iteration
 
-#Part 4: repeat
-done:
+kxloop:
+        bge t2, s4, yloop # Basically the i < 3 rule
+        addi t3, zero, 0 # ky iteration
+kyloop:
+        bge t2, s4, yloop # Basically the i < 3 rule
+yloop_done:
+        # C[i][j] = gx_sum + gy_sum
+        beq zero, zero, yloop
+exit:
         ecall
