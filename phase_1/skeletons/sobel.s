@@ -48,24 +48,43 @@ main:
 
         addi t0, zero, 0 # x iteration
 
-        addi s4, zero, 12 # max since every single iterative maxes at 3, which is 12 bytes
+        addi s4, zero, 3 # max since every single iterative maxes at 3
 
 #Part 2: doing multiplication and such
 xloop:
         bge t0, s4, exit # Basically the i < 3 rule
-        addi t1, zero, 0 # y iteration
+        addi t1, zero, 0 # y iteration = 0
 
 yloop:
-        bge t1, s4, xloop # Basically the i < 3 rule
+        bge t1, s4, xloop_done # Basically the i < 3 rule
         addi t2, zero, 0 # kx iteration
 
 kxloop:
-        bge t2, s4, yloop # Basically the i < 3 rule
+        bge t2, s4, yloop_done # Basically the i < 3 rule
         addi t3, zero, 0 # ky iteration
+
 kyloop:
-        bge t2, s4, yloop # Basically the i < 3 rule
+        bge t3, s4, kxloop_done # Basically the i < 3 rule
+
+        # We start arithmetic down low
+        # gx += A[i + ki][j + kj] * Gx[ki][kj];
+        # gy += A[i + ki][j + kj] * Gy[ki][kj];
+
+        addi t3, t3, 1 # ky++
+        beq zero, zero, kyloop # starts kyloop all over again
+
+kxloop_done:
+        addi t2, t2, 1 # kx++
+        beq zero, zero, kxloop # starts kxloop all over again
+
 yloop_done:
         # C[i][j] = gx_sum + gy_sum
+        addi t1, t1, 1 # y++
         beq zero, zero, yloop
+
+xloop_done:
+        addi t0, t0, 1
+        beq zero, zero, xloop
+
 exit:
         ecall
