@@ -160,6 +160,16 @@ yloop_done:
         # Add C's address to turn offset into address
         add a0, s3, a0 # turns a0 into address of C[t0][t1]
 
+        # Square gx_sum
+        add a0, zero, t3 # passes t3 as an argument
+        jal ra, square_func # Jumps into squaring and stores squared function
+        add t3, zero, a0 # Saves the squared result into t3
+
+        # Square gy_sum
+        add a0, zero, t4 # passes t4 as an argument
+        jal ra, square_func # Jumps into squaring and stores squared function
+        add t4, zero, a0 # Saves the squared result into t4
+
         # Finally do the addition
         add a1, t3, t4
 
@@ -175,3 +185,20 @@ xloop_done:
 
 exit:
         ecall
+
+# Reusable Squaring (a0 = a0 * a0) suggested by claude
+square_func:
+    add  a1, zero, a0       # Multiplicand copy
+    add  t6, zero, zero     # Accumulator = 0
+sq_loop:
+    beq  a1, zero, sq_done  # Done when multiplier bits are exhausted
+    andi a5, a1, 1          # Inspect LSB
+    beq  a5, zero, sq_skip
+    add  t6, t6, a0         # Accumulate shifted value
+sq_skip:
+    slli a0, a0, 1          # Shift multiplicand left
+    srli a1, a1, 1          # Shift multiplier right
+    j    sq_loop
+sq_done:
+    add  a0, zero, t6       # Move result into return register a0
+    jalr zero, 0(ra)        # Return to main caller
