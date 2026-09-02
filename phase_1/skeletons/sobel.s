@@ -32,19 +32,16 @@ main:
 
         # Base address for Matrix A
         lui s0, 0x10010 # memory layout
-        ori s0, s0, 0x0000 # needed so it can point to Matrix A
 
         # Base address for Matrix gx
-        lui s1, 0x10010 # memory layout
-        ori s1, s1, 0x0064 # needed so it can point to Matrix gx, add 100 bytes based on the 5x5 previous matrix
+        addi s1, s0, 100 # needed so it can point to Matrix gx, add 100 bytes based on the 5x5 previous matrix
 
         # Base address for Matrix gy
-        lui s2, 0x10010 # memory layout
-        ori s2, s2, 0x0088 # needed so it can point to Matrix gx, add 36 bytes based on the 3x3 previous matrix
+        addi s2, s1, 36 # needed so it can point to Matrix gy, add 36 bytes based on the 3x3 previous matrix
+
 
         # Base address for Matrix C
-        lui s3, 0x10010 # memory layout
-        ori s3, s3, 0x00AC # needed so it can point to Matrix gy, add 36 bytes based on the 3x3 previous matrix
+        addi s3, s2, 36 # needed so it can point to Matrix C, add 100 bytes based on the 3x3 previous matrix
 
         addi t0, zero, 0 # x iteration
 
