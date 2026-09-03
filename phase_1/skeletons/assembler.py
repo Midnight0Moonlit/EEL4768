@@ -1,13 +1,28 @@
+# This RISC-V assembler was made through the dialogue between the goals of its
+# human developer (Orlando) and the abilities of the AI counterpart (Claude
+# Haiku 4.5)
+
+# Because this manifests both in the overall vision and details of
+# implementation, (human-made) comments will attempt to explain
+# this whole process and balance as much as possible
+
+
 import os
 import re
 import sys
 
 
-# Starting addresses for instructions and data
+# Dictionaries are an obvious way to map single words to (more) complex fields
+# Defining dictionaries is a fairly simple but rote process
+# On its face, perfect for AI to do on its face, but still requires some human
+# organization (see I_TYPE)
+
+
+# Necessary starting addresses for instructions and data
 TEXT_BASE = 0x00400000
 DATA_BASE = 0x10010000
 
-# Assigns ABI names to all 32 registers
+# Assigns ABI names to all 32 registers (so both formats are acceptable)
 REGISTERS = {
     "zero": 0, "ra": 1, "sp": 2, "gp": 3,
     "tp": 4, "t0": 5, "t1": 6, "t2": 7,
@@ -26,6 +41,9 @@ for i in range(32):
 
 # Contains all instructions from reference card
 # Format: opcode, funct3, funct7 (None where N/A)
+
+# AI mistakenly gen'd some insufficient tuples, corrected by human oversight
+# Otherwise, 3-tuples not always "simplest," but the consistency is preferable
 
 
 # Register arithmetic
@@ -53,6 +71,9 @@ I_TYPE = {
     "srai":  (0x20, 0x5, 0x13),
     "ori":   (None, 0x6, 0x13),
     "andi":  (None, 0x7, 0x13),
+
+    # Load family and jalr were first generated as separate dictionaries, but
+    # were consolidated here to keep with assignment conventions
 
     # Load (informal)
     "lb":    (None, 0x0, 0x03),
@@ -93,16 +114,25 @@ J_TYPE = {
     "jal": (None, None, 0x6F),
 }
 
+# Special handling due to unique syntax
 SHIFT_OPS = {"slli", "srli", "srai"}
 LOAD_OPS = {"lb", "lh", "lw", "lbu", "lhu"}
 
 
+# Very useful for troubleshooting and detecting specific invalid behavior
+# Almost all instances from AI
 def error(message):
     raise ValueError(message)
 
 
+# Functions to distinguish input types and determine the exact "specimen"
+# Just normalize raw text into token
+# Basic enough to implement manually, but AI suggested dividing my original
+# one-size-fits-all function with three to allow specific error codes
+
+
 def parse_register(token):
-    token = token.strip().lower() # Normalizes
+    token = token.strip().lower()
 
     if token not in REGISTERS:
         error(f"Invalid register: {token}")
@@ -122,51 +152,6 @@ def parse_number(token, symbols=None):
         error(f"Invalid immediate or symbol: {token}")
 
 
-def check_signed(value, bits, description="immediate"):
-    # Two's complement
-    minimum = -(1 << (bits - 1))
-    maximum = (1 << (bits - 1)) - 1
-
-    # Out of range
-    if value < minimum or value > maximum:
-        error(f"{description} {value} does not fit in {bits} bits")
-
-
-def check_unsigned(value, bits, description="immediate"):
-    if value < 0 or value >= (1 << bits):
-        error(f"{description} {value} does not fit in {bits} bits")
-
-
-def tokenize(line):
-    # Remove comments and tokenizes
-    line = line.split("#", 1)[0].strip()
-
-    # Special case: empty line
-    if not line:
-        return []
-
-    # Separates using commas and whitespace
-    return [x for x in re.split(r"[,\s]+", line) if x]
-
-
-def remove_labels(line):
-    
-    labels = []
-
-    # Continue removing labels
-    while True:
-        match = re.match(r"^\s*([A-Za-z_.$][\w.$]*):", line)
-
-        # No more labels
-        if not match:
-            break
-
-        labels.append(match.group(1)) # Saves to list
-        line = line[match.end():] # Removes from input
-
-    return labels, line.strip()
-
-
 def parse_memory_operand(token, symbols):
     # Determines offset and register
     match = re.fullmatch(r"(.+)\(([^()]+)\)", token.strip())
@@ -181,9 +166,15 @@ def parse_memory_operand(token, symbols):
 
     return immediate, base_register
 
+# Following functions, though only called once each (redundant), clearly
+# delineate the assembly pipeline at the suggestion of AI
+
+# Breaks down exact instruction and converts to to machine code
+# Relatively formulaic enough to write decent pseudo-code for, but AI helped
+# with per-basis differences and especially bitwise operations
 
 def encode_instruction(opcode_text, operands, pc, symbols):
-    opcode = opcode_text.lower() # Normalizes
+    opcode = opcode_text.lower()
 
     # Environment-call instruction
     if opcode == "ecall":
@@ -223,7 +214,8 @@ def encode_instruction(opcode_text, operands, pc, symbols):
         rs1 = parse_register(operands[1])
         shamt = parse_number(operands[2], symbols) # Offset is a constant
 
-        check_unsigned(shamt, 5, "shift amount") # Stored in 5-bit field
+        if shamt < 0 or shamt >= (1 << 5):
+            error(f"Shift amount {shamt} does not fit in 5 bits")
 
         funct7, funct3, op = I_TYPE[opcode] # For locating in instruction dictionary
 
@@ -244,7 +236,8 @@ def encode_instruction(opcode_text, operands, pc, symbols):
         imm, rs1 = parse_memory_operand(operands[1], symbols) # Split into offset and register
         _, funct3, op = I_TYPE[opcode] # funct7 unused
 
-        check_signed(imm, 12) # Stored in 12-bit immediate
+        if imm < (-(1 << 11)) or imm > ((1 << 11) - 1):
+            error(f"Immediate {imm} does not fit in 12 bits")
 
         return (
             ((imm & 0xFFF) << 20)
@@ -263,7 +256,8 @@ def encode_instruction(opcode_text, operands, pc, symbols):
         imm = parse_number(operands[2], symbols)
         _, funct3, op = I_TYPE[opcode]
 
-        check_signed(imm, 12)
+        if imm < (-(1 << 11)) or imm > ((1 << 11) - 1):
+            error(f"Immediate {imm} does not fit in 12 bits")
 
         return (
             ((imm & 0xFFF) << 20)
@@ -282,7 +276,8 @@ def encode_instruction(opcode_text, operands, pc, symbols):
         imm, rs1 = parse_memory_operand(operands[1], symbols)
         _, funct3, op = I_TYPE[opcode]
 
-        check_signed(imm, 12)
+        if imm < (-(1 << 11)) or imm > ((1 << 11) - 1):
+            error(f"Immediate {imm} does not fit in 12 bits")
 
         return (
             ((imm & 0xFFF) << 20)
@@ -301,7 +296,8 @@ def encode_instruction(opcode_text, operands, pc, symbols):
         imm, rs1 = parse_memory_operand(operands[1], symbols)
         _, funct3, op = S_TYPE[opcode]
 
-        check_signed(imm, 12)
+        if imm < (-(1 << 11)) or imm > ((1 << 11) - 1):
+            error(f"Immediate {imm} does not fit in 12 bits")
 
         imm_low = imm & 0x1F
         imm_high = (imm >> 5) & 0x7F
@@ -329,10 +325,11 @@ def encode_instruction(opcode_text, operands, pc, symbols):
         if offset % 2 != 0:
             error("Branch target must be 2-byte aligned")
 
-        check_signed(offset, 13, "branch offset") # 13 bytes
+        if offset < (-(1 << 12)) or offset > ((1 << 12) - 1):
+            error(f"Branch offset {offset} does not fit in 13 bits")
 
         _, funct3, op = B_TYPE[opcode]
-        immediate = offset & 0x1FFF # Only keep 13 bytes
+        immediate = offset & 0x1FFF # Only keep 13 bits
 
         # Extract immediate portions
         bit12 = (immediate >> 12) & 0x1
@@ -360,7 +357,8 @@ def encode_instruction(opcode_text, operands, pc, symbols):
         imm = parse_number(operands[1], symbols)
         _, _, op = U_TYPE[opcode]
 
-        check_unsigned(imm, 20)
+        if imm < 0 or imm >= (1 << 20):
+            error(f"Immediate {imm} does not fit in 20 bits")
 
         return (imm << 12) | (rd << 7) | op
 
@@ -384,7 +382,8 @@ def encode_instruction(opcode_text, operands, pc, symbols):
         if offset % 2 != 0:
             error("Jump target must be 2-byte aligned")
 
-        check_signed(offset, 21, "jump offset")
+        if offset < (-(1 << 20)) or offset > ((1 << 20) - 1):
+            error(f"Jump offset {offset} does not fit in 21 bits")
 
         # Only 21 bits
         immediate = offset & 0x1FFFFF
@@ -408,6 +407,10 @@ def encode_instruction(opcode_text, operands, pc, symbols):
     error(f"Unsupported instruction: {opcode}")
 
 
+# Tracks and sorts symbols, data, and text
+# Perhaps most assisted with AI overall - syntax is so important that seeking
+# guidance for each tempting possibility was a lesson in itself
+
 def first_pass(lines):
     symbols = {}
 
@@ -421,9 +424,19 @@ def first_pass(lines):
     text_offset = 0
     data_offset = 0
 
-    for original_line in lines:
-        # Separates labels from instructions
-        labels, line = remove_labels(original_line)
+    for line in lines:
+        labels = []
+
+        # Continue removing labels (AI warned there may be multiple)
+        while True:
+            match = re.match(r"^\s*([A-Za-z_.$][\w.$]*):", line)
+
+            # No more labels
+            if not match:
+                break
+
+            labels.append(match.group(1)) # Saves to list
+            line = line[match.end():].strip() # Removes from input
 
         for label in labels:
             if label in symbols:
@@ -441,7 +454,15 @@ def first_pass(lines):
         if not line:
             continue
 
-        tokens = tokenize(line) # Lines -> tokens
+        # Remove comments and tokenizes
+        line = line.split("#", 1)[0].strip()
+
+        # Special case: empty line
+        if not line:
+            tokens = []
+
+        # Separates using commas and whitespace
+        tokens = [x for x in re.split(r"[,\s]+", line) if x]
 
         if not tokens:
             continue
@@ -459,8 +480,6 @@ def first_pass(lines):
         # Ignore global-symbol directives
         if directive in (".globl", ".global"):
             continue
-
-
 
         if section == ".data":
             if directive == ".word":
@@ -483,6 +502,9 @@ def first_pass(lines):
 
     return symbols, text_items, data_items, text_offset, data_offset
 
+# Analyzes all given code and encodes them
+# Pseudo-code largely trivial (thanks to pre-defining first_pass), but AI
+# again fantastic for helping with handling bits/bytes
 
 def assemble(lines):
     # First pass: store symbol addresses, instructions, data (and sizes)
@@ -497,12 +519,8 @@ def assemble(lines):
         pc = TEXT_BASE + text_offset
 
         # 32 bits
-        instruction = encode_instruction(
-            tokens[0], # Instruction name
-            tokens[1:], # Instruction operands
-            pc,
-            symbols,
-        )
+        # tokens[0] = name, [1:] = operands
+        instruction = encode_instruction(tokens[0], tokens[1:], pc, symbols)
 
         # 32 bits -> 4 bytes, then appends to text
         text_bytes.extend(instruction.to_bytes(4, byteorder="little"))
@@ -516,9 +534,12 @@ def assemble(lines):
 
     return text_bytes, data_bytes
 
+# Writes assembly product to (different format) files and informs user
+# Mostly manually written
 
 def write_outputs(input_file, text_bytes, data_bytes):
     # Outputs will copy the original filename and append them w/ formats
+    # Recommended optimization by AI
 
     base, _ = os.path.splitext(input_file)
 
@@ -534,26 +555,32 @@ def write_outputs(input_file, text_bytes, data_bytes):
         for byte in text_bytes:
             file.write(f"0x{byte:02x}\n")
 
+        print(f"Wrote {text_hex_file}")
+
     # Text, eight binary digits
     with open(text_bin_file, "w") as file:
         for byte in text_bytes:
             file.write(f"{byte:08b}\n")
+
+        print(f"Wrote {text_bin_file}")
 
     # Data, two hexadecimal
     with open(data_hex_file, "w") as file:
         for byte in data_bytes:
             file.write(f"0x{byte:02x}\n")
 
+        print(f"Wrote {data_hex_file}")
+
     # Data, eight binary
     with open(data_bin_file, "w") as file:
         for byte in data_bytes:
             file.write(f"{byte:08b}\n")
 
-    print(f"Wrote {text_hex_file}")
-    print(f"Wrote {text_bin_file}")
-    print(f"Wrote {data_hex_file}")
-    print(f"Wrote {data_bin_file}")
+        print(f"Wrote {data_bin_file}")
 
+
+# Checks file and runs everything (through function calls)
+# Mostly written manually, AI added ValueError
 
 def main():
     # Only one argument allowed
