@@ -31,7 +31,7 @@ main:
 # Start ori with 0, then add the number of bits needed based on that matrix when moving to the next
 
         # Base address for Matrix A
-        lui s0, 0x1001000 # memory layout
+        lui s0, 0x10010 # memory layout
 
         # Base address for Matrix gx 0x1001064
         addi s1, s0, 100 # needed so it can point to Matrix gx, add 100 bytes based on the 5x5 previous matrix
@@ -151,8 +151,8 @@ yloop_done:
         # reuses both a0 and a1 from the previous loops
         # Using the index formula
         slli s7, t0, 1
-        add s7, a0, t0 
-        add s7, a0, t1
+        add s7, s7, t0 
+        add s7, s7, t1
 
         # Turning entire index to offset
         slli s7, s7, 2 # multiplies by 4
