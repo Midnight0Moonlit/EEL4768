@@ -33,15 +33,15 @@ main:
         # Base address for Matrix A
         lui s0, 0x10010 # memory layout
 
-        # Base address for Matrix gx
+        # Base address for Matrix gx 0x1001064
         addi s1, s0, 100 # needed so it can point to Matrix gx, add 100 bytes based on the 5x5 previous matrix
 
-        # Base address for Matrix gy
+        # Base address for Matrix gy 0x1001088
         addi s2, s1, 36 # needed so it can point to Matrix gy, add 36 bytes based on the 3x3 previous matrix
 
 
-        # Base address for Matrix C
-        addi s3, s2, 36 # needed so it can point to Matrix C, add 100 bytes based on the 3x3 previous matrix
+        # Base address for Matrix C 0x10010AC
+        addi s3, s2, 36 # needed so it can point to Matrix C, add 36 bytes based on the 3x3 previous matrix
 
         addi t0, zero, 0 # x iteration
 
@@ -150,21 +150,21 @@ yloop_done:
         # C[x][y] = gx_sum + gy_sum
         # reuses both a0 and a1 from the previous loops
         # Using the index formula
-        slli a0, t0, 1
-        add a0, a0, t0 
-        add a0, a0, t1
+        slli s7, t0, 1
+        add s7, s7, t0 
+        add s7, s7, t1
 
         # Turning entire index to offset
-        slli a0, a0, 2 # multiplies by 4
+        slli s7, s7, 2 # multiplies by 4
 
         # Add C's address to turn offset into address
-        add a0, s3, a0 # turns a0 into address of C[t0][t1]
+        add s7, s3, s7 # turns a0 into address of C[t0][t1]
 
         # Finally do the addition
         add a1, t3, t4
 
         # Store it in the indexes
-        sw a1, 0(a0)
+        sw a1, 0(s7)
 
         addi t1, t1, 1 # y++
         beq zero, zero, yloop
