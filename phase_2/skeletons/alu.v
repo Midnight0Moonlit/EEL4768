@@ -166,7 +166,7 @@ assign unsigned_lt = |lt_term;
 assign signed_lt = (i_op1[31] ^ i_op2[31]) ? i_op1[31] : unsigned_lt;
 
 // compare outputs
-assign o_eq = ~|(i_op1 ^ i_op2);Only changed 2 lines - don't kno
+assign o_eq = ~|(i_op1 ^ i_op2);
 assign o_slt = i_unsigned ? unsigned_lt : signed_lt;
 
 // slt/sltu results
