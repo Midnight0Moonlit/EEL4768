@@ -61,20 +61,30 @@ module alu (
     // C(i+1) = G(i) + [P(i)*C(i)]
     genvar g;
 
-    generate
-        for(g=0;g<8;g=g+1) begin : GEN_GROUP_PG;
-        localparam integer B = 4 * g;
+    // expanded for loop
+    assign group_p[0] = add_p[0] & add_p[1] & add_p[2] & add_p[3];
+    assign group_g[0] = add_g[3] | (add_p[3] & add_g[2]) | (add_p[3] & add_p[2] & add_g[1]) | (add_p[3] & add_p[2] & add_p[1] & add_g[0]);
 
-        // P group = P(3)*P(2)*P(1)*P(0)
-        // if all 1, carry entering P group can go through whole group
-        //assign group_p[g] = add_p[B] & add_p[B=1] & add_p[B+2] & add_p[B+3];
-        assign group_p[g] = add_p[B] & add_p[B+1] & add_p[B+2] & add_p[B+3]; // correction, source ChatGPT, B+1 instead of B=1
+    assign group_p[1] = add_p[4] & add_p[5] & add_p[6] & add_p[7];
+    assign group_g[1] = add_g[7] | (add_p[7] & add_g[6]) | (add_p[7] & add_p[6] & add_g[5]) | (add_p[7] & add_p[6] & add_p[5] & add_g[4]);
 
-        // G group decides if group produces a carry
-        // carry leaves group if bit 3 generates, bit 2 generates and bit 3 propagates, bit 1 generates and bits 2/3 propagate, or bit 0 generates and bits 1/2/3 propagate
-        assign group_g[g] = add_g[B+3] | (add_p[B+3] & add_g[B+2]) | (add_p[B+3] & add_p[B+2] & add_g[B+1]) | (add_p[B+3] & add_p[B+2] & add_p[B+1] & add_g[B]);
-        end
-    endgenerate
+    assign group_p[2] = add_p[8] & add_p[9] & add_p[10] & add_p[11];
+    assign group_g[2] = add_g[11] | (add_p[11] & add_g[10]) | (add_p[11] & add_p[10] & add_g[9]) | (add_p[11] & add_p[10] & add_p[9] & add_g[8]);
+
+    assign group_p[3] = add_p[12] & add_p[13] & add_p[14] & add_p[15];
+    assign group_g[3] = add_g[15] | (add_p[15] & add_g[14]) | (add_p[15] & add_p[14] & add_g[13]) | (add_p[15] & add_p[14] & add_p[13] & add_g[12]);
+
+    assign group_p[4] = add_p[16] & add_p[17] & add_p[18] & add_p[19];
+    assign group_g[4] = add_g[19] | (add_p[19] & add_g[18]) | (add_p[19] & add_p[18] & add_g[17]) | (add_p[19] & add_p[18] & add_p[17] & add_g[16]);
+
+    assign group_p[5] = add_p[20] & add_p[21] & add_p[22] & add_p[23];
+    assign group_g[5] = add_g[23] | (add_p[23] & add_g[22]) | (add_p[23] & add_p[22] & add_g[21]) | (add_p[23] & add_p[22] & add_p[21] & add_g[20]);
+
+    assign group_p[6] = add_p[24] & add_p[25] & add_p[26] & add_p[27];
+    assign group_g[6] = add_g[27] | (add_p[27] & add_g[26]) | (add_p[27] & add_p[26] & add_g[25]) | (add_p[27] & add_p[26] & add_p[25] & add_g[24]);
+
+    assign group_p[7] = add_p[28] & add_p[29] & add_p[30] & add_p[31];
+    assign group_g[7] = add_g[31] | (add_p[31] & add_g[30]) | (add_p[31] & add_p[30] & add_g[29]) | (add_p[31] & add_p[30] & add_p[29] & add_g[28]);
 
     wire [7:0] group_c; // carry into groups
     // C(1) = G(0) + P(0)*C(0)
@@ -91,27 +101,107 @@ module alu (
 
 // lookahead
 // construct sum
-generate
-    for(g=0;g<8;g=g+1) begin: GEN_SUM
-        localparam integer B = 4 * g;
-        wire c1;
-        wire c2;
-        wire c3;
+wire c1_0;
+wire c2_0;
+wire c3_0;
+wire c1_1;
+wire c2_1;
+wire c3_1;
+wire c1_2;
+wire c2_2;
+wire c3_2;
+wire c1_3;
+wire c2_3;
+wire c3_3;
+wire c1_4;
+wire c2_4;
+wire c3_4;
+wire c1_5;
+wire c2_5;
+wire c3_5;
+wire c1_6;
+wire c2_6;
+wire c3_6;
+wire c1_7;
+wire c2_7;
+wire c3_7;
 
-        // Sum(i) = P(i) XOR C(i)
+// expanded for loop
+// Sum(i) = P(i) XOR C(i)
 
-        // first bit has a carry or propagates carry entering the group
-        assign c1 = add_g[B] | (add_p[B] & group_c[g]);
-        assign c2 = add_g[B+1] | (add_p[B+1] & add_g[B]) | (add_p[B+1] & add_p[B] & group_c[g]);
-        assign c3 = add_g[B+2] | (add_p[B+2] & add_g[B+1]) | (add_p[B+2] & add_p[B+1] & add_g[B]) | (add_p[B+2] & add_p[B+1] & add_p[B] & group_c[g]);
-        
-        // add_result is final addition/subtraction
-        assign add_result[B] = add_p[B] ^ group_c[g];
-        assign add_result[B+1] = add_p[B+1] ^ c1;
-        assign add_result[B+2] = add_p[B+2] ^ c2;
-        assign add_result[B+3] = add_p[B+3] ^ c3;
-    end
-endgenerate
+// first bit has a carry or propagates carry entering the group
+assign c1_0 = add_g[0] | (add_p[0] & group_c[0]);
+assign c2_0 = add_g[1] | (add_p[1] & add_g[0]) | (add_p[1] & add_p[0] & group_c[0]);
+assign c3_0 = add_g[2] | (add_p[2] & add_g[1]) | (add_p[2] & add_p[1] & add_g[0]) | (add_p[2] & add_p[1] & add_p[0] & group_c[0]);
+
+// add_result is final addition/subtraction
+assign add_result[0] = add_p[0] ^ group_c[0];
+assign add_result[1] = add_p[1] ^ c1_0;
+assign add_result[2] = add_p[2] ^ c2_0;
+assign add_result[3] = add_p[3] ^ c3_0;
+
+assign c1_1 = add_g[4] | (add_p[4] & group_c[1]);
+assign c2_1 = add_g[5] | (add_p[5] & add_g[4]) | (add_p[5] & add_p[4] & group_c[1]);
+assign c3_1 = add_g[6] | (add_p[6] & add_g[5]) | (add_p[6] & add_p[5] & add_g[4]) | (add_p[6] & add_p[5] & add_p[4] & group_c[1]);
+
+assign add_result[4] = add_p[4] ^ group_c[1];
+assign add_result[5] = add_p[5] ^ c1_1;
+assign add_result[6] = add_p[6] ^ c2_1;
+assign add_result[7] = add_p[7] ^ c3_1;
+
+assign c1_2 = add_g[8] | (add_p[8] & group_c[2]);
+assign c2_2 = add_g[9] | (add_p[9] & add_g[8]) | (add_p[9] & add_p[8] & group_c[2]);
+assign c3_2 = add_g[10] | (add_p[10] & add_g[9]) | (add_p[10] & add_p[9] & add_g[8]) | (add_p[10] & add_p[9] & add_p[8] & group_c[2]);
+
+assign add_result[8] = add_p[8] ^ group_c[2];
+assign add_result[9] = add_p[9] ^ c1_2;
+assign add_result[10] = add_p[10] ^ c2_2;
+assign add_result[11] = add_p[11] ^ c3_2;
+
+assign c1_3 = add_g[12] | (add_p[12] & group_c[3]);
+assign c2_3 = add_g[13] | (add_p[13] & add_g[12]) | (add_p[13] & add_p[12] & group_c[3]);
+assign c3_3 = add_g[14] | (add_p[14] & add_g[13]) | (add_p[14] & add_p[13] & add_g[12]) | (add_p[14] & add_p[13] & add_p[12] & group_c[3]);
+
+assign add_result[12] = add_p[12] ^ group_c[3];
+assign add_result[13] = add_p[13] ^ c1_3;
+assign add_result[14] = add_p[14] ^ c2_3;
+assign add_result[15] = add_p[15] ^ c3_3;
+
+assign c1_4 = add_g[16] | (add_p[16] & group_c[4]);
+assign c2_4 = add_g[17] | (add_p[17] & add_g[16]) | (add_p[17] & add_p[16] & group_c[4]);
+assign c3_4 = add_g[18] | (add_p[18] & add_g[17]) | (add_p[18] & add_p[17] & add_g[16]) | (add_p[18] & add_p[17] & add_p[16] & group_c[4]);
+
+assign add_result[16] = add_p[16] ^ group_c[4];
+assign add_result[17] = add_p[17] ^ c1_4;
+assign add_result[18] = add_p[18] ^ c2_4;
+assign add_result[19] = add_p[19] ^ c3_4;
+
+assign c1_5 = add_g[20] | (add_p[20] & group_c[5]);
+assign c2_5 = add_g[21] | (add_p[21] & add_g[20]) | (add_p[21] & add_p[20] & group_c[5]);
+assign c3_5 = add_g[22] | (add_p[22] & add_g[21]) | (add_p[22] & add_p[21] & add_g[20]) | (add_p[22] & add_p[21] & add_p[20] & group_c[5]);
+
+assign add_result[20] = add_p[20] ^ group_c[5];
+assign add_result[21] = add_p[21] ^ c1_5;
+assign add_result[22] = add_p[22] ^ c2_5;
+assign add_result[23] = add_p[23] ^ c3_5;
+
+assign c1_6 = add_g[24] | (add_p[24] & group_c[6]);
+assign c2_6 = add_g[25] | (add_p[25] & add_g[24]) | (add_p[25] & add_p[24] & group_c[6]);
+assign c3_6 = add_g[26] | (add_p[26] & add_g[25]) | (add_p[26] & add_p[25] & add_g[24]) | (add_p[26] & add_p[25] & add_p[24] & group_c[6]);
+
+assign add_result[24] = add_p[24] ^ group_c[6];
+assign add_result[25] = add_p[25] ^ c1_6;
+assign add_result[26] = add_p[26] ^ c2_6;
+assign add_result[27] = add_p[27] ^ c3_6;
+
+assign c1_7 = add_g[28] | (add_p[28] & group_c[7]);
+assign c2_7 = add_g[29] | (add_p[29] & add_g[28]) | (add_p[29] & add_p[28] & group_c[7]);
+assign c3_7 = add_g[30] | (add_p[30] & add_g[29]) | (add_p[30] & add_p[29] & add_g[28]) | (add_p[30] & add_p[29] & add_p[28] & group_c[7]);
+
+assign add_result[28] = add_p[28] ^ group_c[7];
+assign add_result[29] = add_p[29] ^ c1_7;
+assign add_result[30] = add_p[30] ^ c2_7;
+assign add_result[31] = add_p[31] ^ c3_7;
 
 // left barrel shifter by 1, 2, 4, 8, 16
 wire [31:0] sll_1;
@@ -149,11 +239,38 @@ assign eq_above[31] = 1'b1;
 
 genvar c;
 
-generate
-    for(c=0;c<31;c=c+1) begin : GEN_COMPARE
-        assign eq_above[c] = eq_above[c+1] & ~(i_op1[c+1] ^ i_op2[c+1]);
-    end
-endgenerate
+// expanded for loop
+assign eq_above[0] = eq_above[1] & ~(i_op1[1] ^ i_op2[1]);
+assign eq_above[1] = eq_above[2] & ~(i_op1[2] ^ i_op2[2]);
+assign eq_above[2] = eq_above[3] & ~(i_op1[3] ^ i_op2[3]);
+assign eq_above[3] = eq_above[4] & ~(i_op1[4] ^ i_op2[4]);
+assign eq_above[4] = eq_above[5] & ~(i_op1[5] ^ i_op2[5]);
+assign eq_above[5] = eq_above[6] & ~(i_op1[6] ^ i_op2[6]);
+assign eq_above[6] = eq_above[7] & ~(i_op1[7] ^ i_op2[7]);
+assign eq_above[7] = eq_above[8] & ~(i_op1[8] ^ i_op2[8]);
+assign eq_above[8] = eq_above[9] & ~(i_op1[9] ^ i_op2[9]);
+assign eq_above[9] = eq_above[10] & ~(i_op1[10] ^ i_op2[10]);
+assign eq_above[10] = eq_above[11] & ~(i_op1[11] ^ i_op2[11]);
+assign eq_above[11] = eq_above[12] & ~(i_op1[12] ^ i_op2[12]);
+assign eq_above[12] = eq_above[13] & ~(i_op1[13] ^ i_op2[13]);
+assign eq_above[13] = eq_above[14] & ~(i_op1[14] ^ i_op2[14]);
+assign eq_above[14] = eq_above[15] & ~(i_op1[15] ^ i_op2[15]);
+assign eq_above[15] = eq_above[16] & ~(i_op1[16] ^ i_op2[16]);
+assign eq_above[16] = eq_above[17] & ~(i_op1[17] ^ i_op2[17]);
+assign eq_above[17] = eq_above[18] & ~(i_op1[18] ^ i_op2[18]);
+assign eq_above[18] = eq_above[19] & ~(i_op1[19] ^ i_op2[19]);
+assign eq_above[19] = eq_above[20] & ~(i_op1[20] ^ i_op2[20]);
+assign eq_above[20] = eq_above[21] & ~(i_op1[21] ^ i_op2[21]);
+assign eq_above[21] = eq_above[22] & ~(i_op1[22] ^ i_op2[22]);
+assign eq_above[22] = eq_above[23] & ~(i_op1[23] ^ i_op2[23]);
+assign eq_above[23] = eq_above[24] & ~(i_op1[24] ^ i_op2[24]);
+assign eq_above[24] = eq_above[25] & ~(i_op1[25] ^ i_op2[25]);
+assign eq_above[25] = eq_above[26] & ~(i_op1[26] ^ i_op2[26]);
+assign eq_above[26] = eq_above[27] & ~(i_op1[27] ^ i_op2[27]);
+assign eq_above[27] = eq_above[28] & ~(i_op1[28] ^ i_op2[28]);
+assign eq_above[28] = eq_above[29] & ~(i_op1[29] ^ i_op2[29]);
+assign eq_above[29] = eq_above[30] & ~(i_op1[30] ^ i_op2[30]);
+assign eq_above[30] = eq_above[31] & ~(i_op1[31] ^ i_op2[31]);
 
 assign lt_term = eq_above & ~i_op1 & i_op2;
 
