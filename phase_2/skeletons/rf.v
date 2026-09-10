@@ -17,10 +17,10 @@ module rf #(
     input  wire [31:0] i_rd_wdata
 );
 
-    // 32 registers of 32-bit width
+    //32 registers of 32-bit width
     reg [31:0] registers [31:0];
 
-    // Synchronous reset and write logic without procedural loops
+    //Synchronous reset and write logic
     always @(posedge i_clk) begin
         if (i_rst) begin
             registers[0]  <= 32'h0; registers[1]  <= 32'h0; registers[2]  <= 32'h0; registers[3]  <= 32'h0;
@@ -36,15 +36,15 @@ module rf #(
         end
     end
 
-    // Combinational reads (x0 is hardwired to 0)
+    //Combinational reads
     wire [31:0] rs1_raw_data = (i_rs1_raddr == 5'd0) ? 32'h0 : registers[i_rs1_raddr];
     wire [31:0] rs2_raw_data = (i_rs2_raddr == 5'd0) ? 32'h0 : registers[i_rs2_raddr];
 
-    // Bypass detection
+    //Bypass detection
     wire bypass_rs1 = (BYPASS_EN != 0) && i_rd_wen && (i_rd_waddr != 5'd0) && (i_rs1_raddr == i_rd_waddr);
     wire bypass_rs2 = (BYPASS_EN != 0) && i_rd_wen && (i_rd_waddr != 5'd0) && (i_rs2_raddr == i_rd_waddr);
 
-    // Final output assignments using ternary operator (? :) instead of if/else
+    //Final output assignments
     assign o_rs1_rdata = bypass_rs1 ? i_rd_wdata : rs1_raw_data;
     assign o_rs2_rdata = bypass_rs2 ? i_rd_wdata : rs2_raw_data;
 
