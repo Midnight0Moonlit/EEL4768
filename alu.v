@@ -53,7 +53,7 @@ module alu (
     assign add_g = i_op1 & add_b;
 
     wire [7:0] group_p; // propagate signal for lookahead carry adder
-    wire [7:0] group_g; // generate signal for lookahead carry adder
+    wire [7:0] group_g // generate signal for lookahead carry adder
 
     // lookahead carry adder: 
     // G(i) = A(i)*B(i)
@@ -62,13 +62,12 @@ module alu (
     genvar g;
 
     generate
-        for(g=0;g<8;g=g+1) begin : GEN_GROUP_PG;
+        for(g=0;g<8;g=g+1) begin : GEN_GROUP_PG
         localparam integer B = 4 * g;
 
         // P group = P(3)*P(2)*P(1)*P(0)
         // if all 1, carry entering P group can go through whole group
-        //assign group_p[g] = add_p[B] & add_p[B=1] & add_p[B+2] & add_p[B+3];
-        assign group_p[g] = add_p[B] & add_p[B+1] & add_p[B+2] & add_p[B+3]; // correction, source ChatGPT, B+1 instead of B=1
+        assign group_p[g] = add_p[B] & add_p[B=1] & add_p[B+2] & add_p[B+3];
 
         // G group decides if group produces a carry
         // carry leaves group if bit 3 generates, bit 2 generates and bit 3 propagates, bit 1 generates and bits 2/3 propagate, or bit 0 generates and bits 1/2/3 propagate
@@ -83,7 +82,7 @@ module alu (
     assign group_c[0] = i_sub;
     assign group_c[1] = group_g[0] | (group_p[0] & group_c[0]);
     assign group_c[2] = group_g[1] | (group_p[1] & group_g[0]) | (group_p[1] & group_p[0] & group_c[0]);
-    assign group_c[3] = group_g[2] | (group_p[2] & group_g[1]) | (group_p[2] & group_p[1] & group_p[0] & group_c[0]) | (group_p[2] & group_p[1] & group_g[0]);
+    assign group_c[3] = group_g[2] | (group_p[2] & group_g[1]) | (group_p[2] & group_p[1] & group_p[0] & group_c[0]);
     assign group_c[4] = group_g[3] | (group_p[3] & group_g[2]) | (group_p[3] & group_p[2] & group_g[1]) | (group_p[3] & group_p[2] & group_p[1] & group_g[0]) | (group_p[3] & group_p[2] & group_p[1] & group_p[0] & group_c[0]);
     assign group_c[5] = group_g[4] | (group_p[4] & group_g[3]) | (group_p[4] & group_p[3] & group_g[2]) | (group_p[4] & group_p[3] & group_p[2] & group_g[1]) | (group_p[4] & group_p[3] & group_p[2] &  group_p[1] & group_g[0]) | (group_p[4] & group_p[3] & group_p[2] & group_p[1] & group_p[0] & group_c[0]);
     assign group_c[6] = group_g[5] | (group_p[5] & group_g[4]) | (group_p[5] & group_p[4] & group_g[3]) | (group_p[5] & group_p[4] & group_p[3] & group_g[2]) | (group_p[5] & group_p[4] & group_p[3] & group_p[2] & group_g[1]) | (group_p[5] & group_p[4] & group_p[3] & group_p[2] & group_p[1] & group_g[0]) | (group_p[5] & group_p[4] & group_p[3] & group_p[2] & group_p[1] & group_p[0] & group_c[0]);
@@ -102,12 +101,12 @@ generate
 
         // first bit has a carry or propagates carry entering the group
         assign c1 = add_g[B] | (add_p[B] & group_c[g]);
-        assign c2 = add_g[B+1] | (add_p[B+1] & add_g[B]) | (add_p[B+1] & add_p[B] & group_c[g]);
+        assign c2 = add_g[B+1] | (add_p[B+1] & add_g[B]) | (Add_p[B+1] & add_p[B] & group_c[g]);
         assign c3 = add_g[B+2] | (add_p[B+2] & add_g[B+1]) | (add_p[B+2] & add_p[B+1] & add_g[B]) | (add_p[B+2] & add_p[B+1] & add_p[B] & group_c[g]);
         
         // add_result is final addition/subtraction
         assign add_result[B] = add_p[B] ^ group_c[g];
-        assign add_result[B+1] = add_p[B+1] ^ c1;
+        assign add_result[B+1] ^ c1;
         assign add_result[B+2] = add_p[B+2] ^ c2;
         assign add_result[B+3] = add_p[B+3] ^ c3;
     end
@@ -122,10 +121,10 @@ wire [31:0] sll_16;
 
 // if bit 0 of shamt is 1, shift 1
 assign sll_1 = i_op2[0] ? {i_op1[30:0], 1'b0} : i_op1;
-assign sll_2 = i_op2[1] ? {sll_1[29:0], 2'b0} : sll_1;
-assign sll_4 = i_op2[2] ? {sll_2[27:0], 4'b0} : sll_2;
-assign sll_8 = i_op2[3] ? {sll_4[23:0], 8'b0} : sll_4;
-assign sll_16 = i_op2[4] ? {sll_8[15:0], 16'b0} : sll_8;
+assign sll_2 = i_op2[1] ? {sll_1[29:0], 2'b00} : sll_1;
+assign sll_4 = i_op2[2] ? {sll_2[27:0], 4'b0000} : sll_2;
+assign sll_8 = i_op2[3] ? {sll_4[23:0], 8'b00000000} : sll_4;
+assign sll_16 = i_op2[4] ? {sll_8[15:0], 16'0000000000000000} : sll_8;
 
 // right barrel shifter, i_arith = 0 (SRL, fill w/ zero), i_arith = 1 (SRA, fill w/ sign bit)
 wire [31:0] sr_1;
@@ -137,8 +136,7 @@ wire [31:0] sr_16;
 assign sr_1 = i_op2[0] ? {(i_arith ? i_op1[31] : 1'b0), i_op1[31:1]} : i_op1;
 assign sr_2 = i_op2[1] ? {{2{(i_arith ? sr_1[31] : 1'b0)}}, sr_1[31:2]} : sr_1;
 assign sr_4 = i_op2[2] ? {{4{(i_arith ? sr_2[31] : 1'b0)}}, sr_2[31:4]} : sr_2;
-assign sr_8 = i_op2[3] ? {{8{(i_arith ? sr_4[31] : 1'b0)}}, sr_4[31:8]} : sr_4;
-assign sr_16 = i_op2[4] ? {{16{(i_arith ? sr_8[31] : 1'b0)}}, sr_8[31:16]} : sr_8;
+assign sr_8 = i_op2[3] ? {{16{(i_arith ? sr_8[31] : 1'b0)}}, sr_8[31:16]} : sr_8;
 
 // comparator, eq_above[n] bits more significant than n equal
 // lt_term[n] bit n is first diff bit and op1[n] = 0, op2[n] = 1
@@ -166,7 +164,7 @@ assign unsigned_lt = |lt_term;
 assign signed_lt = (i_op1[31] ^ i_op2[31]) ? i_op1[31] : unsigned_lt;
 
 // compare outputs
-assign o_eq = ~|(i_op1 ^ i_op2);Only changed 2 lines - don't kno
+assign o_eq = ~|(i_op1 ^ i_op2);
 assign o_slt = i_unsigned ? unsigned_lt : signed_lt;
 
 // slt/sltu results
@@ -177,18 +175,8 @@ assign slt_result = {31'b0, signed_lt};
 assign sltu_result = {31'b0, unsigned_lt};
 
 // final ALU results
-//assign o_result = (i_opsel == 3'b000) ? add_result : (i_opsel == 3'b001) ? sll_16 : (i_opsel == 3'b010) ? slt_result : (i_opsel == 3'b011) ? sltu_result : (i_opsel == 3'b100) ? (i_op1 ^ i_op2) : (i_opsel == 3'b101) ? sr_16 : (i_opsel == 3'b110) ? (i_op1 | i_op2) : (i_op1 & i_op2);
+assign o_result = (i_opsel == 3'b000) ? add_result : (i_opsel == 3'b001) ? sll_16 : (i_opsel == 3'b010) ? slt_result : (i_opsel == 3'b011) ? sltu_result : (i_opsel == 3'b100) ? (i_op1 ^ i_op2) : (i_opsel == 3'b101) ? sr_16 : (i_opsel == 3'b110) ? (i_op1 | i_op2) : (i_op1 & i_op2);
 
-// final mux correction, source ChatGPT
-assign o_result =
-    (i_opsel == 3'b000) ? add_result :
-    (i_opsel == 3'b001) ? sll_16 :
-    (i_opsel == 3'b010) ? slt_result :
-    (i_opsel == 3'b011) ? sltu_result :
-    (i_opsel == 3'b100) ? (i_op1 ^ i_op2) :
-    (i_opsel == 3'b101) ? sr_16 :
-    (i_opsel == 3'b110) ? (i_op1 | i_op2) :
-                           (i_op1 & i_op2);
 endmodule
 
 `default_nettype wire
