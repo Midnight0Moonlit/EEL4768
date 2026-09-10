@@ -27,14 +27,39 @@ module imm (
 
     always @(*) begin
         case (i_format)
-            6'b000001: immediate = 32'b0; // R-type (0 bit)
-            6'b000010: immediate = {{20{i_inst[31]}}, i_inst[31:20]}; // I-type (1 bit)
-            6'b000100: immediate = {{20{i_inst[31]}}, i_inst[31:25], i_inst[11:7]}; // S-type (2 bit)
-            6'b001000: immediate = {{19{i_inst[31]}}, i_inst[31], i_inst[7], i_inst[30:25], i_inst[11:8], 1'b0}; // B-type (3 bit)
-            6'b010000: immediate = {i_inst[31:12], {12{1'b0}}}; // U-type (4 bit)
-            6'b100000: immediate = {{11{i_inst[31]}}, i_inst[31], i_inst[19:12], i_inst[20], i_inst[30:21], {1{1'b0}}}; // J-type (5 bit)
-        endcase //i_format
-    end // always
+            6'b000001: immediate = 32'b0; // R-type
+
+            6'b000010:
+                immediate = {{20{i_inst[31]}}, i_inst[31:20]}; // I-type
+
+            6'b000100:
+                immediate = {{20{i_inst[31]}},
+                            i_inst[31:25],
+                            i_inst[11:7]}; // S-type
+
+            6'b001000:
+                immediate = {{19{i_inst[31]}},
+                            i_inst[31],
+                            i_inst[7],
+                            i_inst[30:25],
+                            i_inst[11:8],
+                            1'b0}; // B-type
+
+            6'b010000:
+                immediate = {i_inst[31:12], 12'b0}; // U-type
+
+            6'b100000:
+                immediate = {{11{i_inst[31]}},
+                            i_inst[31],
+                            i_inst[19:12],
+                            i_inst[20],
+                            i_inst[30:21],
+                            1'b0}; // J-type
+
+            default:
+                immediate = 32'b0;
+        endcase
+    end
 
     assign o_immediate = immediate; //assigns the immediate to the output
 endmodule //imm
