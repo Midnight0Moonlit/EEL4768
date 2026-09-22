@@ -117,6 +117,175 @@ module hart #(
     // Your implementation goes under here
     // ------------------------------------
 
+//PC Register and fetching
+reg [31:0] pc; // program counter
+wire [31:0] pc_plus4 = pc + 32'd4;
+assign o_imem_raddr = pc; // instruction memory address
+
+always @(posedge i_clk) begin
+    if (i_rst) begin
+        pc <= RESET_ADDR; // reset pc to reset address
+    end else begin
+        pc <= pc_next; // update pc to next instruction address
+    end
+
+//Decode and Register Read
+wire [31:0] inst = i_imem_rdata; // fetched instruction
+wire is_break = (inst == 32'h00100073); // check for ebreak instruction
+
+decoder decoder_inst (
+    .i_inst(inst),
+    .o_format(),
+    .o_opcode(),
+    .o_funct3(),
+    .o_funct7(),
+    .o_rs1_raddr(o_retire_rs1_raddr),
+    .o_rs2_raddr(o_retire_rs2_raddr),
+    .o_rd_waddr(o_retire_rd_waddr)
+);
+
+wire[4:0] rd_waddr = (reg_write && !will_trap && !is_ebreak) ? rd_addr_raw : 5'd0;
+
+rf #(.BYPASS_EN(0)) rf_inst (
+    .i_clk(i_clk),
+    .i_rst(i_rst),
+    .i_rs1_raddr(rs1_raddr),
+    .o_rs1_rdata(rs1_rdata),
+    .i_rs2_raddr(rs2_raddr),
+    .o_rs2_rdata(rs2_rdata),
+    .i_rd_wen(reg_write && !will_trap && !is_ebreak),
+    .i_rd_waddr(rd_waddr),
+    .i_rd_wdata(rd_wdata)
+);
+
+//ALU Operand MUX
+wire [31:0] alu_operand1 = is_auipc ? pc : is_lui ? 32'b0 : : rs1_rdata;
+wire [31:0] alu_operand2 = (alu_src) ? imm : rs2_rdata;\
+
+alu u_alu (
+    .i_operand1(alu_operand1),
+    .i_operand2(alu_operand2),
+    .i_alu_op(alu_op),
+    .o_result(alu_result)
+);
+
+//Branch/ Jump Targets
+wire [31:0] pc_plus_imm = pc + imm; // calculate branch/jump target
+wire [31:0] jalr_target = {alu_result[31:1], 1'b0}; // calculate jalr target
+
+wire branch_cond = (funct3 == 3'b000) ? alu_eq
+                    : (funct3 == 3'b001) ? ~alu_eq
+                    : (funct3 == 3'b100) ? alu_slt
+                    : (funct3 == 3'b101) ? ~alu_slt
+                    : (funct3 == 3'b110) ? alu_sltu
+                    : (funct3 == 3'b111) ? ~alu_sltu
+                    : 1'b0;
+
+wire branch_taken = is_branch && branch_cond;
+
+wire [31:0] pc_next = (is_jal || branch_taken) ? pc_plus_imm
+                    : (is_jalr) ? jalr_target
+                    : pc_plus4;
+                    
+//Data Memory
+wire [31:0] mem_byte_addr = alu_result; // memory address from ALU result
+wire [1:0] mem_width = funct3[1:0]; // memory access width from funct3
+wire [1:0] addr_lsbs = mem_byte_addr[1:0]; // least significant bits of address for alignment
+
+wire misaligned = (mem_read || mem_write) && ((mem_width == 2'b01 && addr_lsbs[0]) || (mem_width == 2'b10 && addr_lsbs != 0));
+assign will_trap = misaligned || illegal_inst;
+
+reg [3:0] width_mask;
+always @(*) begin
+    case (mem_width)
+        2'b00: width_mask = 4'b0001; // byte
+        2'b01: width_mask = 4'b0011; // half-word
+        2'b10: width_mask = 4'b1111; // word
+        default: width_mask = 4'b0000; // invalid
+    endcase //mem_width
+end //begin
+
+reg [3:0] mask_c;
+always @(*) begin
+    case (addr_lsbs)
+        2'b00: mask_c = width_mask;
+        2'b01: mask_c = {width_mask[2:0], 1'b0};
+        2'b10: mask_c = {width_mask[1:0], 2'b00};
+        2'b11: mask_c = {width_mask[0], 3'b000};
+        default: mask_c = 4'b0000;
+    endcase //addr_lsbs
+end //begin
+
+reg [31:0] wdata_c;
+always @(*) begin
+    case (addr_lsbs)
+        2'b00: wdata_c = rs2_rdata;
+        2'b01: wdata_c = rs2_data << 8;
+        2'b10: wdata_c = rs2_data << 16;
+        2'b11: wdata_c = rs2_data << 24;
+        default: wdata_c = 32'b0;
+    endcase //addr_lsbs
+end //begin
+
+reg [31:0] load_raw;
+always @(*) begin
+    case (addr_lsbs)
+        2'b00: load_raw = i_dmem_rdata;
+        2'b01: load_raw = i_dmem_rdata >> 8;
+        2'b10: load_raw = i_dmem_rdata >> 16;
+        2'b11: load_raw = i_dmem_rdata >> 24;
+        default: load_raw = 32'b0;
+    endcase //addr_lsbs
+end //begin
+
+reg[31:0] load_data;
+always @(*) begin
+    case (funct3)
+        3'b000: load_data = {{24{load_raw[7]}}, load_raw[7:0]}; // lb
+        3'b001: load_data = {{16{load_raw[15]}}, load_raw[15:0]}; // lh
+        3'b010: load_data = load_raw; // lw
+        3'b100: load_data = {24'b0, load_raw[7:0]}; // lbu
+        3'b101: load_data = {16'b0, load_raw[15:0]}; // lhu
+        default: load_data = 32'b0; // illegal
+    endcase //funct3
+end //begin
+
+assign o_dmem_addr = {mem_byte_addr[31:2], 2'b00};
+assign o_dmem_ren = mem_read  && !will_trap && !is_ebreak;
+assign o_dmem_wen = mem_write && !will_trap && !is_ebreak;
+assign o_dmem_mask = mask_c;
+assign o_dmem_wdata = wdata_c;
+
+//Writeback MUX
+wire[1:0] wb_sel = (is_jal || is_jalr) ? 2'b01 : (mem_read) ? 2'b10 : 2'b00;
+
+reg[31:0] rd_wdata_c;
+always @(*) begin
+    case (wb_sel)
+        2'b00: rd_wdata_c = alu_result; // ALU result
+        2'b01: rd_wdata_c = pc_plus4; // PC + 4 for JAL/JALR
+        2'b10: rd_wdata_c = load_data; // Data from memory
+        default: rd_wdata_c = alu_result; // Default case
+    endcase //wb_sel
+end //begin
+
+//Retire Interface
+wire reads_rs1 = !(is_lui || is_auipc || is_jal || illegal);
+wire reads_rs2 = !alu_src || mem_write;   // R-type/branch use rs2 as ALU B; stores read rs2 for data
+
+assign o_retire_valid     = !i_rst;
+assign o_retire_inst      = inst;
+assign o_retire_trap      = will_trap;
+assign o_retire_halt      = is_ebreak;
+assign o_retire_rs1_raddr = reads_rs1 ? rs1_addr : 5'd0;
+assign o_retire_rs1_rdata = rs1_data;
+assign o_retire_rs2_raddr = reads_rs2 ? rs2_addr : 5'd0;
+assign o_retire_rs2_rdata = rs2_data;
+assign o_retire_rd_waddr  = rd_waddr;
+assign o_retire_rd_wdata  = rd_wdata_c;
+assign o_retire_pc        = pc;
+assign o_retire_next_pc   = pc_next;
+
 endmodule
 
 `default_nettype wire
