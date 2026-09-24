@@ -286,14 +286,18 @@ assign unsigned_lt = |lt_term;
 assign signed_lt = (i_op1[31] ^ i_op2[31]) ? i_op1[31] : unsigned_lt;
 
 // compare outputs
-assign o_eq = ~|(i_op1 ^ i_op2);
-assign o_slt = i_unsigned ? unsigned_lt : signed_lt;
+assign o_eq   = (i_op1 == i_op2);
+assign o_slt  = ($signed(i_op1) < $signed(i_op2));
 
 // phase 3: compare output for SLTU
 // i_opsel == 3'b011 check that SLTU is being performed by ALU
 // if i_op1 < i_op2, unsigned_lt (comp result) is 1
 // i_op1 >= i_op2, unsigned_lt is 0 (hence 1'b0)
-assign o_sltu = (i_opsel == 3'b011) ? unsigned_lt : 1'b0;
+assign o_sltu =
+    (i_opsel == 3'b011)
+        ? (i_op1 < i_op2)
+        : 1'b0;
+
 
 // slt/sltu results
 wire [31:0] slt_result;
