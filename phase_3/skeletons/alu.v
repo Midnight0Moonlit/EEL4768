@@ -38,7 +38,7 @@ module alu (
     output wire        o_eq,
     // Set less than result. This is used downstream to determine if a
     // branch should be taken.
-    output wire        o_slt
+    output wire        o_slt,
 
     // phase 3: I'm adding an o_sltu since the port is needed for SLTU signal
     output wire        o_sltu
