@@ -119,68 +119,73 @@ module hart #(
 
     //PC Register and fetching
     reg  [31:0] pc; // program counter
-    wire [31:0] pc_plus4;
-    wire [31:0] pc_next;
+    wire [31:0] pc_plus4;  //address of next instruction
+    wire [31:0] pc_next;  //next PC value to load
 
     assign pc_plus4     = pc + 32'd4;
     assign o_imem_raddr = pc; // instruction memory address
 
     //check for ebreak instruction
-    reg halted;
+    reg halted;  //remembers if execution has stopped
     wire is_ebreak;
     assign is_ebreak = (i_imem_rdata == 32'h0010_0073);
 
-    wire        dec_legal;
-    wire        dec_halt;
+    wire        dec_legal;  //high if instruction encoding is valid
+    wire        dec_halt;  //high if decoder requests a halt
 
-    wire effective_halt;
+    wire effective_halt; //stop execution on signal
     assign effective_halt = dec_halt || is_ebreak;
 
+    //updates program counter and halt state
     always @(posedge i_clk) begin
         if (i_rst) begin
             pc     <= RESET_ADDR; // reset pc to reset address
-            halted <= 1'b0;
+            halted <= 1'b0; //clear halt flag
         end
         else begin
             pc <= pc_next; // update pc to next instruction address
 
             if (effective_halt)
-                halted <= 1'b1;
+                halted <= 1'b1; //lock into halt state if triggered
         end
     end
 
     //Decode and Register Read
+    //Source and destination register addresses
     wire [4:0]  dec_rs1;
     wire [4:0]  dec_rs2;
     wire [4:0]  dec_rd;
 
+    //extracted sign-extended immediate
     wire [31:0] dec_imm;
 
-    wire        dec_op1_sel;
-    wire        dec_op2_sel;
+    wire        dec_op1_sel; //selects alu input 1
+    wire        dec_op2_sel; //selects alu input 2
 
+    //selects alu operation and gives instructions
     wire [2:0]  dec_alu_opsel;
     wire        dec_alu_sub;
     wire        dec_alu_unsigned;
     wire        dec_alu_arith;
 
-    wire        dec_branch;
-    wire        dec_jump;
+    wire        dec_branch; //high if its a branch instruction
+    wire        dec_jump; //high if its a jump
     wire        dec_branch_equal;
     wire        dec_branch_unsigned;
     wire        dec_branch_invert;
 
-    wire        dec_dmem_ren;
-    wire        dec_dmem_wen;
-    wire [1:0]  dec_dmem_align;
-    wire        dec_dmem_memb;
-    wire        dec_dmem_memh;
-    wire        dec_dmem_memw;
-    wire        dec_dmem_memu;
+    wire        dec_dmem_ren; //memory read enable
+    wire        dec_dmem_wen; //memory write enable
+    wire [1:0]  dec_dmem_align; //memory access alignment
+    wire        dec_dmem_memb; //byte wide access
+    wire        dec_dmem_memh; //half word access
+    wire        dec_dmem_memw; //word wide access
+    wire        dec_dmem_memu; //unsigned load flag
 
-    wire [3:0]  dec_rd_sel;
-    wire        dec_pc_sel;
+    wire [3:0]  dec_rd_sel; //writeback data source
+    wire        dec_pc_sel; //selects jump target
 
+    //decoder module turns the instruction into control signals
     decoder decoder_inst (
         .i_inst           (i_imem_rdata),
 
@@ -219,21 +224,23 @@ module hart #(
     );
 
     //Register file
-
+    //data outputs from source registers
     wire [31:0] rs1_data;
     wire [31:0] rs2_data;
 
-    wire [31:0] rd_wdata;
-    wire [4:0]  rd_waddr;
+    wire [31:0] rd_wdata; //data value to write back into destination register
+    wire [4:0]  rd_waddr; //destination register write address
 
+    //high if instruction causes trap
     wire will_trap;
 
+    //disable register writes on illegal instructions
     assign rd_waddr =
         (dec_legal && !effective_halt && !will_trap)
             ? dec_rd
             : 5'd0;
 
-
+    //register file instance
     rf #(
         .BYPASS_EN(0)
     ) rf_inst (
@@ -253,20 +260,25 @@ module hart #(
     //ALU Operand MUX and Execution
     //Port names correspond to control signals
 
+    //alu inputs
     wire [31:0] alu_operand1;
     wire [31:0] alu_operand2;
 
+    //output computation from alu
     wire [31:0] alu_result;
     wire        alu_eq;
     wire        alu_slt;
     wire        alu_sltu;
 
+    //input 1 - pc or rs1 data
     assign alu_operand1 =
         dec_op1_sel ? pc : rs1_data;
 
+    //input 2 - immediate value or rs2 data
     assign alu_operand2 =
         dec_op2_sel ? dec_imm : rs2_data;
 
+    //arithmatic logic unit
     alu alu_inst (
         .i_op1      (alu_operand1),
         .i_op2      (alu_operand2),
@@ -297,6 +309,7 @@ module hart #(
         (dec_dmem_memh && dmem_byte_addr[0])
         || (dec_dmem_memw && (|dmem_byte_addr[1:0]));
 
+    //trap if instruction is illegal
     assign will_trap =
         !effective_halt &&
         (!dec_legal || misaligned);
@@ -306,12 +319,14 @@ module hart #(
     wire [3:0] access_mask;
     wire [3:0] shifted_mask;
 
+    //create base mask depending on byte, half word, or word access
     assign access_mask =
         dec_dmem_memb ? 4'b0001 :
         dec_dmem_memh ? 4'b0011 :
         dec_dmem_memw ? 4'b1111 :
                         4'b0000;
 
+    //shift mask bits to align w/ target byte offset
     assign shifted_mask =
         (dmem_addr_lsbs == 2'b00) ? access_mask :
         (dmem_addr_lsbs == 2'b01) ? {access_mask[2:0], 1'b0} :
@@ -325,9 +340,11 @@ module hart #(
         (dmem_addr_lsbs == 2'b10) ? (rs2_data << 16) :
                                     (rs2_data << 24);
 
+    //align memory address
     assign o_dmem_addr =
         {dmem_byte_addr[31:2], 2'b00};
 
+    //read and write enables
     assign o_dmem_ren =
     dec_dmem_ren && !will_trap && !effective_halt;
 
@@ -344,6 +361,7 @@ module hart #(
 
     reg [31:0] load_shifted;
 
+    //shift read word down based on lower address bits
     always @(*) begin
         case (dmem_addr_lsbs)
             2'b00:   load_shifted = i_dmem_rdata;
@@ -353,8 +371,10 @@ module hart #(
         endcase
     end
 
+    //final load value
     wire [31:0] load_data;
 
+    //format load data with sign extension
     assign load_data =
         dec_dmem_memb
             ? (dec_dmem_memu
@@ -386,6 +406,7 @@ module hart #(
     wire branch_compare;
     wire branch_taken;
 
+    //evaluate branch conditions
     assign branch_compare =
         dec_branch_equal
             ? alu_eq
@@ -393,6 +414,7 @@ module hart #(
                 ? alu_sltu
                 : alu_slt;
 
+    //determine if branch is taken
     assign branch_taken =
         dec_branch &&
         (dec_branch_invert ? !branch_compare : branch_compare) &&
@@ -403,9 +425,11 @@ module hart #(
 
     assign branch_target = pc + dec_imm;
 
+    //clear low bit of target
     assign jalr_target =
         {alu_result[31:1], 1'b0};
 
+    //next program counter selection
     assign pc_next =
         effective_halt
             ? pc_plus4
