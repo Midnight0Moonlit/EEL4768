@@ -3,7 +3,7 @@
 module hart #(
     // After reset, the program counter (PC) should be initialized to this
     // address and start executing instructions from there.
-    parameter RESET_ADDR = 32'h00000000,
+    parameter RESET_ADDR = 32'h00400000,
     // When set, pipeline forwarding optimizations are enabled.
     parameter FWD_EN = 1,
     // When set, register file bypassing is enabled.
@@ -139,685 +139,683 @@ module hart #(
     output wire [31:0] o_retire_next_pc
 
 `ifdef RISCV_FORMAL
-    ,`RVFI_OUTPUTS
+    ,`RVFI_OUTPUTS,
 `endif
 );
 
-    // =========================================================================
-    // Control & Opcodes Defines
-    // =========================================================================
-    localparam [6:0] OPCODE_R_TYPE = 7'b0110011;
-    localparam [6:0] OPCODE_I_TYPE = 7'b0010011;
-    localparam [6:0] OPCODE_LOAD   = 7'b0000011;
-    localparam [6:0] OPCODE_STORE  = 7'b0100011;
-    localparam [6:0] OPCODE_BRANCH = 7'b1100011;
-    localparam [6:0] OPCODE_JALR   = 7'b1100111;
-    localparam [6:0] OPCODE_JAL    = 7'b1101111;
-    localparam [6:0] OPCODE_LUI    = 7'b0110111;
-    localparam [6:0] OPCODE_AUIPC  = 7'b0010111;
-    localparam [6:0] OPCODE_SYSTEM = 7'b1110011;
+    localparam [31:0] NOP = 32'h00000013;
 
-    localparam [3:0] ALU_ADD  = 4'd0;
-    localparam [3:0] ALU_SUB  = 4'd1;
-    localparam [3:0] ALU_SLL  = 4'd2;
-    localparam [3:0] ALU_SLT  = 4'd3;
-    localparam [3:0] ALU_SLTU = 4'd4;
-    localparam [3:0] ALU_XOR  = 4'd5;
-    localparam [3:0] ALU_SRL  = 4'd6;
-    localparam [3:0] ALU_SRA  = 4'd7;
-    localparam [3:0] ALU_OR   = 4'd8;
-    localparam [3:0] ALU_AND  = 4'd9;
+    // ----------------------------------------------------------------
+    // IF stage
+    // ----------------------------------------------------------------
 
-    // =========================================================================
-    // Pipeline Control & Stall Signal Declarations
-    // =========================================================================
-    reg stall;
-    reg flush_if_id;
-    reg flush_id_ex;
+    reg  [31:0] pc;
+    reg         stop_fetch;
+    wire [31:0] pc_plus4;
 
-    // =========================================================================
-    // Register File Implementation
-    // =========================================================================
-    reg [31:0] rf [0:31];
-    integer i;
-    initial begin
-        for (i = 0; i < 32; i = i + 1) begin
-            rf[i] = 32'h00000000;
-        end
-    end
+    assign pc_plus4     = pc + 32'd4;
+    assign o_imem_raddr = pc;
 
-    // =========================================================================
-    // Stage 1: Fetch (IF)
-    // =========================================================================
-    reg [31:0] pc_reg;
-    wire [31:0] pc_next;
-    
-    // Jump / Branch redirection signals coming from EX stage
-    wire        ex_branch_take;
+    // ----------------------------------------------------------------
+    // IF/ID pipeline registers
+    // ----------------------------------------------------------------
+
+    reg         ifid_valid;
+    reg  [31:0] ifid_inst;
+    reg  [31:0] ifid_pc;
+
+    // ----------------------------------------------------------------
+    // ID stage: decoder and register file
+    // ----------------------------------------------------------------
+
+    wire        dec_legal;
+    wire        dec_halt;
+    wire [4:0]  dec_rs1;
+    wire [4:0]  dec_rs2;
+    wire [4:0]  dec_rd;
+    wire [31:0] dec_imm;
+
+    wire        dec_op1_sel;
+    wire        dec_op2_sel;
+    wire [2:0]  dec_alu_opsel;
+    wire        dec_alu_sub;
+    wire        dec_alu_unsigned;
+    wire        dec_alu_arith;
+
+    wire        dec_branch;
+    wire        dec_jump;
+    wire        dec_branch_equal;
+    wire        dec_branch_unsigned;
+    wire        dec_branch_invert;
+
+    wire        dec_dmem_ren;
+    wire        dec_dmem_wen;
+    wire [1:0]  dec_dmem_align;
+    wire        dec_dmem_memb;
+    wire        dec_dmem_memh;
+    wire        dec_dmem_memw;
+    wire        dec_dmem_memu;
+
+    wire [3:0]  dec_rd_sel;
+    wire        dec_pc_sel;
+
+    decoder decoder_inst (
+        .i_inst            (ifid_inst),
+
+        .o_legal           (dec_legal),
+        .o_halt            (dec_halt),
+
+        .o_rs1             (dec_rs1),
+        .o_rs2             (dec_rs2),
+        .o_rd              (dec_rd),
+        .o_immediate       (dec_imm),
+
+        .o_op1_sel         (dec_op1_sel),
+        .o_op2_sel         (dec_op2_sel),
+
+        .o_alu_opsel       (dec_alu_opsel),
+        .o_alu_sub         (dec_alu_sub),
+        .o_alu_unsigned    (dec_alu_unsigned),
+        .o_alu_arith       (dec_alu_arith),
+
+        .o_branch          (dec_branch),
+        .o_jump            (dec_jump),
+        .o_branch_equal    (dec_branch_equal),
+        .o_branch_unsigned (dec_branch_unsigned),
+        .o_branch_invert   (dec_branch_invert),
+
+        .o_dmem_ren        (dec_dmem_ren),
+        .o_dmem_wen        (dec_dmem_wen),
+        .o_dmem_align      (dec_dmem_align),
+        .o_dmem_memb       (dec_dmem_memb),
+        .o_dmem_memh       (dec_dmem_memh),
+        .o_dmem_memw       (dec_dmem_memw),
+        .o_dmem_memu       (dec_dmem_memu),
+
+        .o_rd_sel          (dec_rd_sel),
+        .o_pc_sel          (dec_pc_sel)
+    );
+
+    // Illegal instructions report no source-register reads.
+    wire [4:0] id_rs1_addr;
+    wire [4:0] id_rs2_addr;
+    wire       id_halt;
+
+    assign id_rs1_addr = (ifid_valid && dec_legal) ? dec_rs1 : 5'd0;
+    assign id_rs2_addr = (ifid_valid && dec_legal) ? dec_rs2 : 5'd0;
+    assign id_halt     = ifid_valid && dec_halt;
+
+    wire [31:0] rf_rs1_data;
+    wire [31:0] rf_rs2_data;
+
+    // Writeback signals are declared below and feed the register file.
+    reg  [4:0]  memwb_rd_waddr;
+    reg  [31:0] memwb_rd_wdata;
+    reg         memwb_valid;
+    reg         memwb_regwrite;
+
+    wire [4:0] rf_waddr;
+    assign rf_waddr =
+        (memwb_valid && memwb_regwrite) ? memwb_rd_waddr : 5'd0;
+
+    rf #(
+        .BYPASS_EN(BYPASS_EN)
+    ) rf_inst (
+        .i_clk       (i_clk),
+        .i_rst       (i_rst),
+
+        .i_rs1_raddr (id_rs1_addr),
+        .o_rs1_rdata (rf_rs1_data),
+
+        .i_rs2_raddr (id_rs2_addr),
+        .o_rs2_rdata (rf_rs2_data),
+
+        .i_rd_waddr  (rf_waddr),
+        .i_rd_wdata  (memwb_rd_wdata)
+    );
+
+    // ----------------------------------------------------------------
+    // ID/EX pipeline registers
+    // ----------------------------------------------------------------
+
+    reg         idex_valid;
+    reg  [31:0] idex_inst;
+    reg  [31:0] idex_pc;
+    reg  [31:0] idex_pc4;
+
+    reg  [4:0]  idex_rs1_addr;
+    reg  [4:0]  idex_rs2_addr;
+    reg  [4:0]  idex_rd_addr;
+    reg  [31:0] idex_rs1_data;
+    reg  [31:0] idex_rs2_data;
+    reg  [31:0] idex_imm;
+
+    reg         idex_legal;
+    reg         idex_halt;
+    reg         idex_op1_sel;
+    reg         idex_op2_sel;
+    reg  [2:0]  idex_alu_opsel;
+    reg         idex_alu_sub;
+    reg         idex_alu_unsigned;
+    reg         idex_alu_arith;
+
+    reg         idex_branch;
+    reg         idex_jump;
+    reg         idex_branch_equal;
+    reg         idex_branch_unsigned;
+    reg         idex_branch_invert;
+    reg         idex_pc_sel;
+
+    reg         idex_dmem_ren;
+    reg         idex_dmem_wen;
+    reg         idex_dmem_memb;
+    reg         idex_dmem_memh;
+    reg         idex_dmem_memw;
+    reg         idex_dmem_memu;
+    reg  [3:0]  idex_rd_sel;
+
+    // ----------------------------------------------------------------
+    // EX/MEM pipeline registers
+    // ----------------------------------------------------------------
+
+    reg         exmem_valid;
+    reg  [31:0] exmem_inst;
+    reg  [31:0] exmem_pc;
+    reg  [31:0] exmem_next_pc;
+
+    reg  [4:0]  exmem_rs1_addr;
+    reg  [4:0]  exmem_rs2_addr;
+    reg  [31:0] exmem_rs1_data;
+    reg  [31:0] exmem_rs2_data;
+
+    reg  [4:0]  exmem_rd_addr;
+    reg  [31:0] exmem_alu_result;
+    reg  [31:0] exmem_imm;
+    reg  [31:0] exmem_pc4;
+
+    reg         exmem_trap;
+    reg         exmem_halt;
+    reg         exmem_regwrite;
+    reg  [3:0]  exmem_rd_sel;
+
+    reg         exmem_dmem_ren;
+    reg         exmem_dmem_wen;
+    reg         exmem_dmem_memb;
+    reg         exmem_dmem_memh;
+    reg         exmem_dmem_memw;
+    reg         exmem_dmem_memu;
+
+
+    // ----------------------------------------------------------------
+    // EX stage: forwarding and ALU
+    // ----------------------------------------------------------------
+
+    wire [31:0] mem_load_data;
+    wire [31:0] mem_wb_value;
+
+    wire [31:0] ex_rs1_forward;
+    wire [31:0] ex_rs2_forward;
+
+    wire exmem_can_forward;
+    wire memwb_can_forward;
+
+    assign exmem_can_forward =
+        exmem_valid && exmem_regwrite && !exmem_trap &&
+        (exmem_rd_addr != 5'd0);
+
+    assign memwb_can_forward =
+        memwb_valid && memwb_regwrite &&
+        (memwb_rd_waddr != 5'd0);
+
+    assign ex_rs1_forward =
+        (FWD_EN && exmem_can_forward && (exmem_rd_addr == idex_rs1_addr))
+            ? mem_wb_value
+        : (FWD_EN && memwb_can_forward && (memwb_rd_waddr == idex_rs1_addr))
+            ? memwb_rd_wdata
+        : idex_rs1_data;
+
+    assign ex_rs2_forward =
+        (FWD_EN && exmem_can_forward && (exmem_rd_addr == idex_rs2_addr))
+            ? mem_wb_value
+        : (FWD_EN && memwb_can_forward && (memwb_rd_waddr == idex_rs2_addr))
+            ? memwb_rd_wdata
+        : idex_rs2_data;
+
+    wire [31:0] ex_alu_op1;
+    wire [31:0] ex_alu_op2;
+    wire [31:0] ex_alu_result;
+    wire        ex_alu_eq;
+    wire        ex_alu_slt;
+    wire        ex_alu_sltu;
+
+    assign ex_alu_op1 = idex_op1_sel ? idex_pc : ex_rs1_forward;
+    assign ex_alu_op2 = idex_op2_sel ? idex_imm : ex_rs2_forward;
+
+    alu alu_inst (
+        .i_op1      (ex_alu_op1),
+        .i_op2      (ex_alu_op2),
+        .i_opsel    (idex_alu_opsel),
+        .i_sub      (idex_alu_sub),
+        .i_unsigned (idex_alu_unsigned),
+        .i_arith    (idex_alu_arith),
+        .o_result   (ex_alu_result),
+        .o_eq       (ex_alu_eq),
+        .o_slt      (ex_alu_slt),
+        .o_sltu     (ex_alu_sltu)
+    );
+
+    wire ex_branch_compare;
+    wire ex_branch_taken;
     wire [31:0] ex_branch_target;
+    wire [31:0] ex_jalr_target;
+    wire        ex_control_taken;
+    wire [31:0] ex_control_target;
+    wire        ex_data_misaligned;
+    wire        ex_inst_misaligned;
+    wire        ex_trap;
+    wire        ex_redirect;
+    wire        ex_control_flush;
+    wire [31:0] ex_next_pc;
 
-    assign pc_next = ex_branch_take ? ex_branch_target : (pc_reg + 32'd4);
+    assign ex_branch_compare =
+        idex_branch_equal
+            ? ex_alu_eq
+            : idex_branch_unsigned
+                ? ex_alu_sltu
+                : ex_alu_slt;
 
-    always @(posedge i_clk) begin
-        if (i_rst) begin
-            pc_reg <= RESET_ADDR;
-        end else if (!stall) begin
-            pc_reg <= pc_next;
-        end
-    end
+    assign ex_branch_taken =
+        idex_valid && idex_branch &&
+        (idex_branch_invert ? !ex_branch_compare : ex_branch_compare);
 
-    assign o_imem_raddr = pc_reg;
+    assign ex_branch_target = idex_pc + idex_imm;
+    assign ex_jalr_target   = {ex_alu_result[31:1], 1'b0};
 
-    // =========================================================================
-    // IF / ID Pipeline Register
-    // =========================================================================
-    reg [31:0] if_id_pc;
-    reg [31:0] if_id_inst;
-    reg        if_id_valid;
+    assign ex_control_taken =
+        ex_branch_taken || (idex_valid && idex_jump);
 
-    always @(posedge i_clk) begin
-        if (i_rst || flush_if_id) begin
-            if_id_pc    <= 32'h0;
-            if_id_inst  <= 32'h00000013; // NOP (addi x0, x0, 0)
-            if_id_valid <= 1'b0;
-        end else if (!stall) begin
-            if_id_pc    <= pc_reg;
-            if_id_inst  <= i_imem_rdata;
-            if_id_valid <= 1'b1;
-        end
-    end
+    assign ex_control_target =
+        (idex_jump && idex_pc_sel) ? ex_jalr_target : ex_branch_target;
 
-    // =========================================================================
-    // Stage 2: Instruction Decode (ID)
-    // =========================================================================
-    wire [31:0] id_inst = if_id_inst;
-    wire [31:0] id_pc   = if_id_pc;
+    assign ex_data_misaligned =
+        (idex_dmem_ren || idex_dmem_wen) &&
+        ((idex_dmem_memh && ex_alu_result[0]) ||
+         (idex_dmem_memw && (|ex_alu_result[1:0])));
 
-    wire [6:0] id_opcode = id_inst[6:0];
-    wire [4:0] id_rd     = id_inst[11:7];
-    wire [2:0] id_funct3 = id_inst[14:12];
-    wire [4:0] id_rs1    = id_inst[19:15];
-    wire [4:0] id_rs2    = id_inst[24:20];
-    wire [6:0] id_funct7 = id_inst[31:25];
+    assign ex_inst_misaligned =
+        ex_control_taken && (ex_control_target[1:0] != 2'b00);
 
-    // Source Register Read Decoders
-    wire id_uses_rs1 = (id_opcode == OPCODE_R_TYPE)  ||
-                       (id_opcode == OPCODE_I_TYPE)  ||
-                       (id_opcode == OPCODE_LOAD)    ||
-                       (id_opcode == OPCODE_STORE)   ||
-                       (id_opcode == OPCODE_BRANCH)  ||
-                       (id_opcode == OPCODE_JALR);
+    assign ex_trap =
+        idex_valid &&
+        (!idex_legal || ex_data_misaligned || ex_inst_misaligned);
 
-    wire id_uses_rs2 = (id_opcode == OPCODE_R_TYPE)  ||
-                       (id_opcode == OPCODE_STORE)   ||
-                       (id_opcode == OPCODE_BRANCH);
+    assign ex_redirect = ex_control_taken && !ex_trap;
+    assign ex_control_flush = idex_valid && ex_control_taken;
+    assign ex_next_pc = ex_redirect ? ex_control_target : idex_pc4;
 
-    wire [4:0] id_rs1_raddr = (id_uses_rs1 && if_id_valid) ? id_rs1 : 5'd0;
-    wire [4:0] id_rs2_raddr = (id_uses_rs2 && if_id_valid) ? id_rs2 : 5'd0;
+    // ----------------------------------------------------------------
+    // MEM stage: data-memory interface and writeback-value selection
+    // ----------------------------------------------------------------
 
-    // Immediate Decoder
-    reg [31:0] id_imm;
-    always @(*) begin
-        case (id_opcode)
-            OPCODE_I_TYPE, OPCODE_LOAD, OPCODE_JALR:
-                id_imm = {{20{id_inst[31]}}, id_inst[31:20]};
-            OPCODE_STORE:
-                id_imm = {{20{id_inst[31]}}, id_inst[31:25], id_inst[11:7]};
-            OPCODE_BRANCH:
-                id_imm = {{20{id_inst[31]}}, id_inst[7], id_inst[30:25], id_inst[11:8], 1'b0};
-            OPCODE_LUI, OPCODE_AUIPC:
-                id_imm = {id_inst[31:12], 12'b0};
-            OPCODE_JAL:
-                id_imm = {{12{id_inst[31]}}, id_inst[19:12], id_inst[20], id_inst[30:21], 1'b0};
-            default:
-                id_imm = 32'b0;
-        endcase
-    end
+    wire [1:0]  mem_addr_lsbs;
+    wire [3:0]  mem_access_mask;
+    wire [3:0]  mem_shifted_mask;
+    wire [31:0] mem_load_shifted;
 
-    // Register File Read Logic with Register File Bypassing (WB -> ID)
-    reg [31:0] id_wb_rf_wdata;
-    reg [4:0]  mem_wb_rd_waddr;
-    reg        mem_wb_reg_write;
+    assign mem_addr_lsbs = exmem_alu_result[1:0];
 
-    wire [31:0] rf_rs1_data = (id_rs1_raddr == 5'd0) ? 32'd0 : rf[id_rs1_raddr];
-    wire [31:0] rf_rs2_data = (id_rs2_raddr == 5'd0) ? 32'd0 : rf[id_rs2_raddr];
+    assign mem_access_mask =
+        exmem_dmem_memb ? 4'b0001 :
+        exmem_dmem_memh ? 4'b0011 :
+        exmem_dmem_memw ? 4'b1111 :
+                          4'b0000;
 
-    wire [31:0] id_rs1_rdata = (BYPASS_EN && mem_wb_reg_write && (mem_wb_rd_waddr != 5'd0) && (mem_wb_rd_waddr == id_rs1_raddr)) ?
-                               id_wb_rf_wdata : rf_rs1_data;
-    wire [31:0] id_rs2_rdata = (BYPASS_EN && mem_wb_reg_write && (mem_wb_rd_waddr != 5'd0) && (mem_wb_rd_waddr == id_rs2_raddr)) ?
-                               id_wb_rf_wdata : rf_rs2_data;
+    assign mem_shifted_mask =
+        (mem_addr_lsbs == 2'b00) ? mem_access_mask :
+        (mem_addr_lsbs == 2'b01) ? {mem_access_mask[2:0], 1'b0} :
+        (mem_addr_lsbs == 2'b10) ? {mem_access_mask[1:0], 2'b00} :
+                                   {mem_access_mask[0], 3'b000};
 
-    // Control Decoding
-    reg       id_reg_write;
-    reg       id_mem_ren;
-    reg       id_mem_wen;
-    reg [3:0] id_alu_op;
-    reg       id_alu_src_b; // 0: rs2, 1: immediate
-    reg       id_is_branch;
-    reg       id_is_jal;
-    reg       id_is_jalr;
-    reg       id_illegal_inst;
-    reg       id_ebreak;
+    assign mem_load_shifted =
+        (mem_addr_lsbs == 2'b00) ? i_dmem_rdata :
+        (mem_addr_lsbs == 2'b01) ? (i_dmem_rdata >> 8) :
+        (mem_addr_lsbs == 2'b10) ? (i_dmem_rdata >> 16) :
+                                   (i_dmem_rdata >> 24);
 
-    always @(*) begin
-        id_reg_write    = 1'b0;
-        id_mem_ren      = 1'b0;
-        id_mem_wen      = 1'b0;
-        id_alu_op       = ALU_ADD;
-        id_alu_src_b    = 1'b0;
-        id_is_branch    = 1'b0;
-        id_is_jal       = 1'b0;
-        id_is_jalr      = 1'b0;
-        id_illegal_inst = 1'b0;
-        id_ebreak       = 1'b0;
+    assign mem_load_data =
+        exmem_dmem_memb
+            ? (exmem_dmem_memu
+                ? {24'b0, mem_load_shifted[7:0]}
+                : {{24{mem_load_shifted[7]}}, mem_load_shifted[7:0]})
+        : exmem_dmem_memh
+            ? (exmem_dmem_memu
+                ? {16'b0, mem_load_shifted[15:0]}
+                : {{16{mem_load_shifted[15]}}, mem_load_shifted[15:0]})
+        : mem_load_shifted;
 
-        if (if_id_valid) begin
-            case (id_opcode)
-                OPCODE_R_TYPE: begin
-                    id_reg_write = 1'b1;
-                    case (id_funct3)
-                        3'b000: id_alu_op = (id_funct7[5]) ? ALU_SUB : ALU_ADD;
-                        3'b001: id_alu_op = ALU_SLL;
-                        3'b010: id_alu_op = ALU_SLT;
-                        3'b011: id_alu_op = ALU_SLTU;
-                        3'b100: id_alu_op = ALU_XOR;
-                        3'b101: id_alu_op = (id_funct7[5]) ? ALU_SRA : ALU_SRL;
-                        3'b110: id_alu_op = ALU_OR;
-                        3'b111: id_alu_op = ALU_AND;
-                    endcase
-                end
-                OPCODE_I_TYPE: begin
-                    id_reg_write = 1'b1;
-                    id_alu_src_b = 1'b1;
-                    case (id_funct3)
-                        3'b000: id_alu_op = ALU_ADD;
-                        3'b001: id_alu_op = ALU_SLL;
-                        3'b010: id_alu_op = ALU_SLT;
-                        3'b011: id_alu_op = ALU_SLTU;
-                        3'b100: id_alu_op = ALU_XOR;
-                        3'b101: id_alu_op = (id_funct7[5]) ? ALU_SRA : ALU_SRL;
-                        3'b110: id_alu_op = ALU_OR;
-                        3'b111: id_alu_op = ALU_AND;
-                    endcase
-                end
-                OPCODE_LOAD: begin
-                    id_reg_write = 1'b1;
-                    id_alu_src_b = 1'b1;
-                    id_mem_ren   = 1'b1;
-                    id_alu_op    = ALU_ADD;
-                end
-                OPCODE_STORE: begin
-                    id_alu_src_b = 1'b1;
-                    id_mem_wen   = 1'b1;
-                    id_alu_op    = ALU_ADD;
-                end
-                OPCODE_BRANCH: begin
-                    id_is_branch = 1'b1;
-                end
-                OPCODE_JAL: begin
-                    id_reg_write = 1'b1;
-                    id_is_jal    = 1'b1;
-                end
-                OPCODE_JALR: begin
-                    id_reg_write = 1'b1;
-                    id_alu_src_b = 1'b1;
-                    id_is_jalr   = 1'b1;
-                    id_alu_op    = ALU_ADD;
-                end
-                OPCODE_LUI, OPCODE_AUIPC: begin
-                    id_reg_write = 1'b1;
-                    id_alu_src_b = 1'b1;
-                    id_alu_op    = ALU_ADD;
-                end
-                OPCODE_SYSTEM: begin
-                    if (id_inst[31:7] == 25'b000000000001_00000_000_00000) begin
-                        id_ebreak = 1'b1;
-                    end else begin
-                        id_illegal_inst = 1'b1;
-                    end
-                end
-                default: id_illegal_inst = 1'b1;
-            endcase
-        end
-    end
+    assign mem_wb_value =
+        exmem_rd_sel[0] ? exmem_alu_result :
+        exmem_rd_sel[1] ? exmem_imm :
+        exmem_rd_sel[2] ? exmem_pc4 :
+        exmem_rd_sel[3] ? mem_load_data :
+                          32'b0;
 
-    wire [4:0] id_rd_waddr = (id_reg_write && if_id_valid) ? id_rd : 5'd0;
+    // Forward store data from the WB stage when needed.
+    wire [31:0] mem_store_data_final;
+    assign mem_store_data_final =
+        (FWD_EN &&
+         exmem_dmem_wen &&
+         memwb_can_forward &&
+         (memwb_rd_waddr == exmem_rs2_addr))
+            ? memwb_rd_wdata
+            : exmem_rs2_data;
 
-    // =========================================================================
-    // ID / EX Pipeline Register
-    // =========================================================================
-    reg [31:0] id_ex_pc;
-    reg [31:0] id_ex_inst;
-    reg        id_ex_valid;
-    reg [4:0]  id_ex_rs1_raddr;
-    reg [4:0]  id_ex_rs2_raddr;
-    reg [31:0] id_ex_rs1_rdata;
-    reg [31:0] id_ex_rs2_rdata;
-    reg [4:0]  id_ex_rd_waddr;
-    reg [31:0] id_ex_imm;
-    reg [2:0]  id_ex_funct3;
-    reg        id_ex_reg_write;
-    reg        id_ex_mem_ren;
-    reg        id_ex_mem_wen;
-    reg [3:0]  id_ex_alu_op;
-    reg        id_ex_alu_src_b;
-    reg        id_ex_is_branch;
-    reg        id_ex_is_jal;
-    reg        id_ex_is_jalr;
-    reg        id_ex_illegal_inst;
-    reg        id_ex_ebreak;
+    assign o_dmem_addr = {exmem_alu_result[31:2], 2'b00};
 
-    always @(posedge i_clk) begin
-        if (i_rst || flush_id_ex) begin
-            id_ex_pc           <= 32'h0;
-            id_ex_inst         <= 32'h00000013;
-            id_ex_valid        <= 1'b0;
-            id_ex_rs1_raddr    <= 5'd0;
-            id_ex_rs2_raddr    <= 5'd0;
-            id_ex_rs1_rdata    <= 32'd0;
-            id_ex_rs2_rdata    <= 32'd0;
-            id_ex_rd_waddr     <= 5'd0;
-            id_ex_imm          <= 32'd0;
-            id_ex_funct3       <= 3'd0;
-            id_ex_reg_write    <= 1'b0;
-            id_ex_mem_ren      <= 1'b0;
-            id_ex_mem_wen      <= 1'b0;
-            id_ex_alu_op       <= ALU_ADD;
-            id_ex_alu_src_b    <= 1'b0;
-            id_ex_is_branch    <= 1'b0;
-            id_ex_is_jal       <= 1'b0;
-            id_ex_is_jalr      <= 1'b0;
-            id_ex_illegal_inst <= 1'b0;
-            id_ex_ebreak       <= 1'b0;
-        end else if (stall) begin
-            id_ex_pc           <= 32'h0;
-            id_ex_inst         <= 32'h00000013;
-            id_ex_valid        <= 1'b0;
-            id_ex_rs1_raddr    <= 5'd0;
-            id_ex_rs2_raddr    <= 5'd0;
-            id_ex_rs1_rdata    <= 32'd0;
-            id_ex_rs2_rdata    <= 32'd0;
-            id_ex_rd_waddr     <= 5'd0;
-            id_ex_imm          <= 32'd0;
-            id_ex_funct3       <= 3'd0;
-            id_ex_reg_write    <= 1'b0;
-            id_ex_mem_ren      <= 1'b0;
-            id_ex_mem_wen      <= 1'b0;
-            id_ex_alu_op       <= ALU_ADD;
-            id_ex_alu_src_b    <= 1'b0;
-            id_ex_is_branch    <= 1'b0;
-            id_ex_is_jal       <= 1'b0;
-            id_ex_is_jalr      <= 1'b0;
-            id_ex_illegal_inst <= 1'b0;
-            id_ex_ebreak       <= 1'b0;
-        end else begin
-            id_ex_pc           <= id_pc;
-            id_ex_inst         <= id_inst;
-            id_ex_valid        <= if_id_valid;
-            id_ex_rs1_raddr    <= id_rs1_raddr;
-            id_ex_rs2_raddr    <= id_rs2_raddr;
-            id_ex_rs1_rdata    <= id_rs1_rdata;
-            id_ex_rs2_rdata    <= id_rs2_rdata;
-            id_ex_rd_waddr     <= id_rd_waddr;
-            id_ex_imm          <= id_imm;
-            id_ex_funct3       <= id_funct3;
-            id_ex_reg_write    <= id_reg_write;
-            id_ex_mem_ren      <= id_mem_ren;
-            id_ex_mem_wen      <= id_mem_wen;
-            id_ex_alu_op       <= id_alu_op;
-            id_ex_alu_src_b    <= id_alu_src_b;
-            id_ex_is_branch    <= id_is_branch;
-            id_ex_is_jal       <= id_is_jal;
-            id_ex_is_jalr      <= id_is_jalr;
-            id_ex_illegal_inst <= id_illegal_inst;
-            id_ex_ebreak       <= id_ebreak;
-        end
-    end
+    assign o_dmem_ren =
+        exmem_valid && exmem_dmem_ren && !exmem_trap;
 
-    // =========================================================================
-    // Stage 3: Execute (EX)
-    // =========================================================================
-    reg [4:0]  ex_mem_rd_waddr;
-    reg        ex_mem_reg_write;
-    reg [31:0] ex_mem_alu_res;
+    assign o_dmem_wen =
+        exmem_valid && exmem_dmem_wen && !exmem_trap;
 
-    // Forwarding Unit
-    reg [31:0] ex_operand_a;
-    reg [31:0] ex_operand_b_forwarded;
+    assign o_dmem_mask =
+        (o_dmem_ren || o_dmem_wen) ? mem_shifted_mask : 4'b0000;
 
-    always @(*) begin
-        // Forwarding for RS1
-        if (FWD_EN && ex_mem_reg_write && (ex_mem_rd_waddr != 5'd0) && (ex_mem_rd_waddr == id_ex_rs1_raddr)) begin
-            ex_operand_a = ex_mem_alu_res;
-        end else if (FWD_EN && mem_wb_reg_write && (mem_wb_rd_waddr != 5'd0) && (mem_wb_rd_waddr == id_ex_rs1_raddr)) begin
-            ex_operand_a = id_wb_rf_wdata;
-        end else begin
-            ex_operand_a = id_ex_rs1_rdata;
-        end
+    assign o_dmem_wdata =
+        (mem_addr_lsbs == 2'b00) ? mem_store_data_final :
+        (mem_addr_lsbs == 2'b01) ? (mem_store_data_final << 8) :
+        (mem_addr_lsbs == 2'b10) ? (mem_store_data_final << 16) :
+                                   (mem_store_data_final << 24);
 
-        // Forwarding for RS2
-        if (FWD_EN && ex_mem_reg_write && (ex_mem_rd_waddr != 5'd0) && (ex_mem_rd_waddr == id_ex_rs2_raddr)) begin
-            ex_operand_b_forwarded = ex_mem_alu_res;
-        end else if (FWD_EN && mem_wb_reg_write && (mem_wb_rd_waddr != 5'd0) && (mem_wb_rd_waddr == id_ex_rs2_raddr)) begin
-            ex_operand_b_forwarded = id_wb_rf_wdata;
-        end else begin
-            ex_operand_b_forwarded = id_ex_rs2_rdata;
-        end
-    end
+    // ----------------------------------------------------------------
+    // MEM/WB pipeline registers
+    // ----------------------------------------------------------------
 
-    // Select ALU B input
-    wire [31:0] ex_operand_b = (id_ex_inst[6:0] == OPCODE_LUI)   ? id_ex_imm :
-                               (id_ex_inst[6:0] == OPCODE_AUIPC) ? id_ex_imm :
-                               id_ex_alu_src_b ? id_ex_imm : ex_operand_b_forwarded;
+    reg  [31:0] memwb_inst;
+    reg  [31:0] memwb_pc;
+    reg  [31:0] memwb_next_pc;
+    reg         memwb_trap;
+    reg         memwb_halt;
 
-    wire [31:0] ex_alu_a = (id_ex_inst[6:0] == OPCODE_AUIPC) ? id_ex_pc : ex_operand_a;
+    reg  [4:0]  memwb_rs1_addr;
+    reg  [4:0]  memwb_rs2_addr;
+    reg  [31:0] memwb_rs1_data;
+    reg  [31:0] memwb_rs2_data;
 
-    // ALU Calculation
-    reg [31:0] ex_alu_res;
-    always @(*) begin
-        case (id_ex_alu_op)
-            ALU_ADD:  ex_alu_res = ex_alu_a + ex_operand_b;
-            ALU_SUB:  ex_alu_res = ex_alu_a - ex_operand_b;
-            ALU_SLL:  ex_alu_res = ex_alu_a << ex_operand_b[4:0];
-            ALU_SLT:  ex_alu_res = ($signed(ex_alu_a) <$signed(ex_operand_b)) ? 32'd1 : 32'd0;
-            ALU_SLTU: ex_alu_res = (ex_alu_a < ex_operand_b) ? 32'd1 : 32'd0;
-            ALU_XOR:  ex_alu_res = ex_alu_a ^ ex_operand_b;
-            ALU_SRL:  ex_alu_res = ex_alu_a >> ex_operand_b[4:0];
-            ALU_SRA:  ex_alu_res = $signed(ex_alu_a) >>> ex_operand_b[4:0];
-            ALU_OR:   ex_alu_res = ex_alu_a | ex_operand_b;
-            ALU_AND:  ex_alu_res = ex_alu_a & ex_operand_b;
-            default:  ex_alu_res = 32'd0;
-        endcase
-    end
+    reg  [31:0] memwb_dmem_addr;
+    reg         memwb_dmem_ren;
+    reg         memwb_dmem_wen;
+    reg  [3:0]  memwb_dmem_mask;
+    reg  [31:0] memwb_dmem_wdata;
+    reg  [31:0] memwb_dmem_rdata;
 
-    // Branch Resolution
-    reg ex_branch_condition;
-    always @(*) begin
-        case (id_ex_funct3)
-            3'b000: ex_branch_condition = (ex_operand_a == ex_operand_b_forwarded);
-            3'b001: ex_branch_condition = (ex_operand_a != ex_operand_b_forwarded);
-            3'b100: ex_branch_condition = ($signed(ex_operand_a) <$signed(ex_operand_b_forwarded));
-            3'b101: ex_branch_condition = ($signed(ex_operand_a) >=$signed(ex_operand_b_forwarded));
-            3'b110: ex_branch_condition = (ex_operand_a < ex_operand_b_forwarded);
-            3'b111: ex_branch_condition = (ex_operand_a >= ex_operand_b_forwarded);
-            default: ex_branch_condition = 1'b0;
-        endcase
-    end
+    // ----------------------------------------------------------------
+    // Hazard detection
+    // ----------------------------------------------------------------
 
-    assign ex_branch_take   = id_ex_valid && ((id_ex_is_branch && ex_branch_condition) || id_ex_is_jal || id_ex_is_jalr);
-    
-    wire [31:0] jalr_target = (ex_operand_a + id_ex_imm) & ~32'd1;
-    assign ex_branch_target = id_ex_is_jalr ? jalr_target : (id_ex_pc + id_ex_imm);
+    wire hazard_idex_rs1;
+    wire hazard_idex_rs2;
+    wire hazard_exmem_rs1;
+    wire hazard_exmem_rs2;
+    wire hazard_memwb_rs1;
+    wire hazard_memwb_rs2;
+    wire hazard_idex;
+    wire hazard_exmem;
+    wire hazard_memwb;
+    wire pipeline_stall;
 
-    wire ex_inst_addr_misaligned = ex_branch_take && (ex_branch_target[1:0] != 2'b00);
+    assign hazard_idex_rs1 =
+        ifid_valid && idex_valid && idex_legal &&
+        (idex_rd_addr != 5'd0) && (id_rs1_addr != 5'd0) &&
+        (id_rs1_addr == idex_rd_addr);
 
-    // Hazard Control Signals Logic
-    always @(*) begin
-        stall       = 1'b0;
-        flush_if_id = 1'b0;
-        flush_id_ex = 1'b0;
+    assign hazard_idex_rs2 =
+        ifid_valid && idex_valid && idex_legal &&
+        (idex_rd_addr != 5'd0) && (id_rs2_addr != 5'd0) &&
+        (id_rs2_addr == idex_rd_addr);
 
-        // Load-use hazard detection
-        if (id_ex_valid && id_ex_mem_ren && (id_ex_rd_waddr != 5'd0)) begin
-            if ((id_rs1_raddr == id_ex_rd_waddr) || (id_rs2_raddr == id_ex_rd_waddr)) begin
-                stall = 1'b1;
-            end
-        end
+    assign hazard_idex = hazard_idex_rs1 || hazard_idex_rs2;
 
-        // Pipeline Stalls when forwarding is disabled
-        if (!FWD_EN) begin
-            if (id_ex_valid && (id_ex_rd_waddr != 5'd0) && id_ex_reg_write) begin
-                if ((id_rs1_raddr == id_ex_rd_waddr) || (id_rs2_raddr == id_ex_rd_waddr)) stall = 1'b1;
-            end
-            if (ex_mem_reg_write && (ex_mem_rd_waddr != 5'd0)) begin
-                if ((id_rs1_raddr == ex_mem_rd_waddr) || (id_rs2_raddr == ex_mem_rd_waddr)) stall = 1'b1;
-            end
-        end
+    assign hazard_exmem_rs1 =
+        ifid_valid && exmem_valid && exmem_regwrite && !exmem_trap &&
+        (exmem_rd_addr != 5'd0) && (id_rs1_addr != 5'd0) &&
+        (id_rs1_addr == exmem_rd_addr);
 
-        // Control hazard flushes
-        if (ex_branch_take) begin
-            flush_if_id = 1'b1;
-            flush_id_ex = 1'b1;
-        end
-    end
+    assign hazard_exmem_rs2 =
+        ifid_valid && exmem_valid && exmem_regwrite && !exmem_trap &&
+        (exmem_rd_addr != 5'd0) && (id_rs2_addr != 5'd0) &&
+        (id_rs2_addr == exmem_rd_addr);
 
-    // Final result calculation in EX stage
-    wire [31:0] ex_final_res = (id_ex_is_jal || id_ex_is_jalr) ? (id_ex_pc + 32'd4) : ex_alu_res;
+    assign hazard_exmem = hazard_exmem_rs1 || hazard_exmem_rs2;
 
-    // =========================================================================
-    // EX / MEM Pipeline Register
-    // =========================================================================
-    reg [31:0] ex_mem_pc;
-    reg [31:0] ex_mem_inst;
-    reg        ex_mem_valid;
-    reg [4:0]  ex_mem_rs1_raddr;
-    reg [4:0]  ex_mem_rs2_raddr;
-    reg [31:0] ex_mem_rs1_rdata;
-    reg [31:0] ex_mem_rs2_rdata;
-    reg [31:0] ex_mem_rs2_forwarded;
-    reg [31:0] ex_mem_imm;
-    reg [2:0]  ex_mem_funct3;
-    reg        ex_mem_mem_ren;
-    reg        ex_mem_mem_wen;
-    reg        ex_mem_illegal_inst;
-    reg        ex_mem_inst_misaligned;
-    reg        ex_mem_ebreak;
-    reg [31:0] ex_mem_next_pc;
+    assign hazard_memwb_rs1 =
+        ifid_valid && memwb_valid && memwb_regwrite &&
+        (memwb_rd_waddr != 5'd0) && (id_rs1_addr != 5'd0) &&
+        (id_rs1_addr == memwb_rd_waddr);
+
+    assign hazard_memwb_rs2 =
+        ifid_valid && memwb_valid && memwb_regwrite &&
+        (memwb_rd_waddr != 5'd0) && (id_rs2_addr != 5'd0) &&
+        (id_rs2_addr == memwb_rd_waddr);
+
+    assign hazard_memwb = hazard_memwb_rs1 || hazard_memwb_rs2;
+
+    assign pipeline_stall =
+        !FWD_EN &&
+        (hazard_idex || hazard_exmem || ((!BYPASS_EN) && hazard_memwb));
+
+    // ----------------------------------------------------------------
+    // Pipeline state updates
+    // ----------------------------------------------------------------
 
     always @(posedge i_clk) begin
         if (i_rst) begin
-            ex_mem_pc              <= 32'h0;
-            ex_mem_inst            <= 32'h00000013;
-            ex_mem_valid           <= 1'b0;
-            ex_mem_rs1_raddr       <= 5'd0;
-            ex_mem_rs2_raddr       <= 5'd0;
-            ex_mem_rs1_rdata       <= 32'd0;
-            ex_mem_rs2_rdata       <= 32'd0;
-            ex_mem_rs2_forwarded   <= 32'd0;
-            ex_mem_rd_waddr        <= 5'd0;
-            ex_mem_imm             <= 32'd0;
-            ex_mem_funct3          <= 3'd0;
-            ex_mem_reg_write       <= 1'b0;
-            ex_mem_mem_ren         <= 1'b0;
-            ex_mem_mem_wen         <= 1'b0;
-            ex_mem_alu_res         <= 32'd0;
-            ex_mem_illegal_inst    <= 1'b0;
-            ex_mem_inst_misaligned <= 1'b0;
-            ex_mem_ebreak          <= 1'b0;
-            ex_mem_next_pc         <= 32'd0;
-        end else begin
-            ex_mem_pc              <= id_ex_pc;
-            ex_mem_inst            <= id_ex_inst;
-            ex_mem_valid           <= id_ex_valid;
-            ex_mem_rs1_raddr       <= id_ex_rs1_raddr;
-            ex_mem_rs2_raddr       <= id_ex_rs2_raddr;
-            ex_mem_rs1_rdata       <= id_ex_rs1_rdata;
-            ex_mem_rs2_rdata       <= id_ex_rs2_rdata;
-            ex_mem_rs2_forwarded   <= ex_operand_b_forwarded;
-            ex_mem_rd_waddr        <= id_ex_rd_waddr;
-            ex_mem_imm             <= id_ex_imm;
-            ex_mem_funct3          <= id_ex_funct3;
-            ex_mem_reg_write       <= id_ex_reg_write;
-            ex_mem_mem_ren         <= id_ex_mem_ren;
-            ex_mem_mem_wen         <= id_ex_mem_wen;
-            ex_mem_alu_res         <= ex_final_res;
-            ex_mem_illegal_inst    <= id_ex_illegal_inst;
-            ex_mem_inst_misaligned <= ex_inst_addr_misaligned;
-            ex_mem_ebreak          <= id_ex_ebreak;
-            ex_mem_next_pc         <= ex_branch_take ? ex_branch_target : (id_ex_pc + 32'd4);
+            pc          <= RESET_ADDR;
+            stop_fetch  <= 1'b0;
+
+            ifid_valid  <= 1'b0;
+            idex_valid  <= 1'b0;
+            exmem_valid <= 1'b0;
+            memwb_valid <= 1'b0;
+        end
+        else begin
+            // The older EX instruction always advances into MEM.
+            exmem_valid <= idex_valid;
+            exmem_inst  <= idex_inst;
+            exmem_pc    <= idex_pc;
+            exmem_next_pc <= ex_next_pc;
+
+            exmem_rs1_addr <= idex_rs1_addr;
+            exmem_rs2_addr <= idex_rs2_addr;
+            exmem_rs1_data <= ex_rs1_forward;
+            exmem_rs2_data <= ex_rs2_forward;
+
+            exmem_rd_addr     <= idex_rd_addr;
+            exmem_alu_result  <= ex_alu_result;
+            exmem_imm          <= idex_imm;
+            exmem_pc4          <= idex_pc4;
+            exmem_trap         <= ex_trap;
+            exmem_halt         <= idex_halt;
+            exmem_regwrite     <= idex_valid && idex_legal &&
+                                  !idex_halt && !ex_trap &&
+                                  (idex_rd_addr != 5'd0);
+            exmem_rd_sel       <= idex_rd_sel;
+
+            exmem_dmem_ren  <= idex_valid && idex_dmem_ren && !ex_trap;
+            exmem_dmem_wen  <= idex_valid && idex_dmem_wen && !ex_trap;
+            exmem_dmem_memb <= idex_dmem_memb;
+            exmem_dmem_memh <= idex_dmem_memh;
+            exmem_dmem_memw <= idex_dmem_memw;
+            exmem_dmem_memu <= idex_dmem_memu;
+
+            // MEM advances into WB. Loads capture the word read in MEM.
+            memwb_valid <= exmem_valid;
+            memwb_inst  <= exmem_inst;
+            memwb_pc    <= exmem_pc;
+            memwb_next_pc <= exmem_next_pc;
+            memwb_trap  <= exmem_trap;
+            memwb_halt  <= exmem_halt;
+
+            memwb_rs1_addr <= exmem_rs1_addr;
+            memwb_rs2_addr <= exmem_rs2_addr;
+            memwb_rs1_data <= exmem_rs1_data;
+            memwb_rs2_data <=
+                exmem_dmem_wen ? mem_store_data_final : exmem_rs2_data;
+
+            memwb_rd_waddr <=
+                (exmem_valid && exmem_regwrite && !exmem_trap)
+                    ? exmem_rd_addr : 5'd0;
+            memwb_rd_wdata <= mem_wb_value;
+            memwb_regwrite <= exmem_valid && exmem_regwrite &&
+                              !exmem_trap;
+
+            memwb_dmem_addr <= o_dmem_addr;
+            memwb_dmem_ren  <= o_dmem_ren;
+            memwb_dmem_wen  <= o_dmem_wen;
+            memwb_dmem_mask <= o_dmem_mask;
+            memwb_dmem_wdata <= o_dmem_wdata;
+            memwb_dmem_rdata <= o_dmem_ren ? i_dmem_rdata : 32'b0;
+
+            // Taken control flow always flushes younger instructions.
+            // A misaligned target traps and continues at the old PC + 4.
+            if (ex_control_flush) begin
+                pc <= ex_redirect ? ex_control_target : idex_pc4;
+                ifid_valid <= 1'b0;
+                ifid_inst  <= NOP;
+                idex_valid <= 1'b0;
+                idex_inst  <= NOP;
+            end
+            else if (pipeline_stall) begin
+                // Hold PC and IF/ID; insert a NOP bubble into EX.
+                pc         <= pc;
+                ifid_valid <= ifid_valid;
+                ifid_inst  <= ifid_inst;
+                ifid_pc    <= ifid_pc;
+                idex_valid <= 1'b0;
+                idex_inst  <= NOP;
+            end
+            else if (id_halt) begin
+                // Keep the ebreak in the pipeline, but discard younger work.
+                stop_fetch <= 1'b1;
+                pc         <= pc;
+                ifid_valid <= 1'b0;
+                ifid_inst  <= NOP;
+
+                idex_valid <= 1'b1;
+                idex_inst  <= ifid_inst;
+                idex_pc    <= ifid_pc;
+                idex_pc4   <= ifid_pc + 32'd4;
+                idex_rs1_addr <= 5'd0;
+                idex_rs2_addr <= 5'd0;
+                idex_rd_addr  <= 5'd0;
+                idex_rs1_data <= 32'b0;
+                idex_rs2_data <= 32'b0;
+                idex_imm      <= dec_imm;
+                idex_legal    <= dec_legal;
+                idex_halt     <= 1'b1;
+                idex_op1_sel  <= dec_op1_sel;
+                idex_op2_sel  <= dec_op2_sel;
+                idex_alu_opsel <= dec_alu_opsel;
+                idex_alu_sub   <= dec_alu_sub;
+                idex_alu_unsigned <= dec_alu_unsigned;
+                idex_alu_arith <= dec_alu_arith;
+                idex_branch   <= 1'b0;
+                idex_jump     <= 1'b0;
+                idex_branch_equal <= dec_branch_equal;
+                idex_branch_unsigned <= dec_branch_unsigned;
+                idex_branch_invert <= dec_branch_invert;
+                idex_pc_sel   <= dec_pc_sel;
+                idex_dmem_ren <= 1'b0;
+                idex_dmem_wen <= 1'b0;
+                idex_dmem_memb <= dec_dmem_memb;
+                idex_dmem_memh <= dec_dmem_memh;
+                idex_dmem_memw <= dec_dmem_memw;
+                idex_dmem_memu <= dec_dmem_memu;
+                idex_rd_sel   <= 4'b0000;
+            end
+            else if (stop_fetch) begin
+                pc         <= pc;
+                ifid_valid <= 1'b0;
+                ifid_inst  <= NOP;
+                idex_valid <= 1'b0;
+                idex_inst  <= NOP;
+            end
+            else begin
+                // Normal IF and ID advancement.
+                pc         <= pc_plus4;
+                ifid_valid <= 1'b1;
+                ifid_inst  <= i_imem_rdata;
+                ifid_pc    <= pc;
+
+                idex_valid <= ifid_valid;
+                idex_inst  <= ifid_inst;
+                idex_pc    <= ifid_pc;
+                idex_pc4   <= ifid_pc + 32'd4;
+
+                idex_rs1_addr <= id_rs1_addr;
+                idex_rs2_addr <= id_rs2_addr;
+                idex_rd_addr  <= dec_legal ? dec_rd : 5'd0;
+                idex_rs1_data <= (id_rs1_addr != 5'd0)
+                                    ? rf_rs1_data : 32'b0;
+                idex_rs2_data <= (id_rs2_addr != 5'd0)
+                                    ? rf_rs2_data : 32'b0;
+                idex_imm      <= dec_imm;
+
+                idex_legal    <= dec_legal;
+                idex_halt     <= id_halt;
+                idex_op1_sel  <= dec_op1_sel;
+                idex_op2_sel  <= dec_op2_sel;
+                idex_alu_opsel <= dec_alu_opsel;
+                idex_alu_sub   <= dec_alu_sub;
+                idex_alu_unsigned <= dec_alu_unsigned;
+                idex_alu_arith <= dec_alu_arith;
+
+                idex_branch   <= dec_legal && dec_branch;
+                idex_jump     <= dec_legal && dec_jump;
+                idex_branch_equal <= dec_branch_equal;
+                idex_branch_unsigned <= dec_branch_unsigned;
+                idex_branch_invert <= dec_branch_invert;
+                idex_pc_sel   <= dec_pc_sel;
+
+                idex_dmem_ren <= dec_legal && dec_dmem_ren;
+                idex_dmem_wen <= dec_legal && dec_dmem_wen;
+                idex_dmem_memb <= dec_dmem_memb;
+                idex_dmem_memh <= dec_dmem_memh;
+                idex_dmem_memw <= dec_dmem_memw;
+                idex_dmem_memu <= dec_dmem_memu;
+                idex_rd_sel   <= dec_legal ? dec_rd_sel : 4'b0000;
+            end
         end
     end
 
-    // =========================================================================
-    // Stage 4: Memory Access (MEM)
-    // =========================================================================
-    wire [31:0] mem_addr_raw = ex_mem_alu_res;
-    assign o_dmem_addr = {mem_addr_raw[31:2], 2'b00};
+    // ----------------------------------------------------------------
+    // Retire interface
+    // ----------------------------------------------------------------
 
-    // Unaligned Memory Access Detection
-    reg mem_data_misaligned;
-    always @(*) begin
-        mem_data_misaligned = 1'b0;
-        if (ex_mem_valid && (ex_mem_mem_ren || ex_mem_mem_wen)) begin
-            case (ex_mem_funct3[1:0])
-                2'b01: if (mem_addr_raw[0] != 1'b0) mem_data_misaligned = 1'b1; // Half-word alignment
-                2'b10: if (mem_addr_raw[1:0] != 2'b00) mem_data_misaligned = 1'b1; // Word alignment
-                default: mem_data_misaligned = 1'b0;
-            endcase
-        end
-    end
+    assign o_retire_valid = memwb_valid;
+    assign o_retire_inst  = memwb_inst;
+    assign o_retire_trap  = memwb_valid && memwb_trap;
+    assign o_retire_halt  = memwb_valid && memwb_halt;
 
-    assign o_dmem_ren = ex_mem_valid && ex_mem_mem_ren && !mem_data_misaligned;
-    assign o_dmem_wen = ex_mem_valid && ex_mem_mem_wen && !mem_data_misaligned;
+    assign o_retire_rs1_raddr = memwb_rs1_addr;
+    assign o_retire_rs1_rdata = memwb_rs1_data;
+    assign o_retire_rs2_raddr = memwb_rs2_addr;
+    assign o_retire_rs2_rdata = memwb_rs2_data;
 
-    // Byte Enable Mask Generation
-    reg [3:0] mem_mask;
-    always @(*) begin
-        case (ex_mem_funct3[1:0])
-            2'b00: mem_mask = 4'b0001 << mem_addr_raw[1:0];      // Byte
-            2'b01: mem_mask = 4'b0011 << {mem_addr_raw[1], 1'b0}; // Half-word
-            2'b10: mem_mask = 4'b1111;                            // Word
-            default: mem_mask = 4'b0000;
-        endcase
-    end
+    assign o_retire_rd_waddr =
+        (memwb_valid && memwb_regwrite) ? memwb_rd_waddr : 5'd0;
+    assign o_retire_rd_wdata = memwb_rd_wdata;
 
-    assign o_dmem_mask = (o_dmem_ren || o_dmem_wen) ? mem_mask : 4'b0000;
+    assign o_retire_pc      = memwb_pc;
+    assign o_retire_next_pc = memwb_next_pc;
 
-    // Store Data Alignment Logic
-    reg [31:0] mem_wdata_aligned;
-    always @(*) begin
-        case (ex_mem_funct3[1:0])
-            2'b00: mem_wdata_aligned = ex_mem_rs2_forwarded << (mem_addr_raw[1:0] * 8);
-            2'b01: mem_wdata_aligned = ex_mem_rs2_forwarded << (mem_addr_raw[1] * 16);
-            default: mem_wdata_aligned = ex_mem_rs2_forwarded;
-        endcase
-    end
-
-    assign o_dmem_wdata = mem_wdata_aligned;
-
-    // Load Data Extraction and Extension Logic
-    reg [31:0] mem_rdata_processed;
-    wire [31:0] shifted_rdata = i_dmem_rdata >> (mem_addr_raw[1:0] * 8);
-
-    always @(*) begin
-        case (ex_mem_funct3)
-            3'b000: mem_rdata_processed = {{24{shifted_rdata[7]}}, shifted_rdata[7:0]};   // LB
-            3'b001: mem_rdata_processed = {{16{shifted_rdata[15]}}, shifted_rdata[15:0]}; // LH
-            3'b010: mem_rdata_processed = i_dmem_rdata;                                   // LW
-            3'b100: mem_rdata_processed = {24'b0, shifted_rdata[7:0]};                   // LBU
-            3'b101: mem_rdata_processed = {16'b0, shifted_rdata[15:0]};                  // LHU
-            default: mem_rdata_processed = 32'b0;
-        endcase
-    end
-
-    // =========================================================================
-    // MEM / WB Pipeline Register
-    // =========================================================================
-    reg [31:0] mem_wb_pc;
-    reg [31:0] mem_wb_inst;
-    reg        mem_wb_valid;
-    reg [4:0]  mem_wb_rs1_raddr;
-    reg [4:0]  mem_wb_rs2_raddr;
-    reg [31:0] mem_wb_rs1_rdata;
-    reg [31:0] mem_wb_rs2_rdata;
-    reg [31:0] mem_wb_alu_res;
-    reg [31:0] mem_wb_rdata;
-    reg        mem_wb_mem_ren;
-    reg        mem_wb_mem_wen;
-    reg [31:0] mem_wb_dmem_addr;
-    reg [3:0]  mem_wb_dmem_mask;
-    reg [31:0] mem_wb_dmem_wdata;
-    reg        mem_wb_illegal_inst;
-    reg        mem_wb_inst_misaligned;
-    reg        mem_wb_data_misaligned;
-    reg        mem_wb_ebreak;
-    reg [31:0] mem_wb_next_pc;
-
-    always @(posedge i_clk) begin
-        if (i_rst) begin
-            mem_wb_pc              <= 32'h0;
-            mem_wb_inst            <= 32'h00000013;
-            mem_wb_valid           <= 1'b0;
-            mem_wb_rs1_raddr       <= 5'd0;
-            mem_wb_rs2_raddr       <= 5'd0;
-            mem_wb_rs1_rdata       <= 32'd0;
-            mem_wb_rs2_rdata       <= 32'd0;
-            mem_wb_rd_waddr        <= 5'd0;
-            mem_wb_reg_write       <= 1'b0;
-            mem_wb_alu_res         <= 32'd0;
-            mem_wb_rdata           <= 32'd0;
-            mem_wb_mem_ren         <= 1'b0;
-            mem_wb_mem_wen         <= 1'b0;
-            mem_wb_dmem_addr       <= 32'd0;
-            mem_wb_dmem_mask       <= 4'd0;
-            mem_wb_dmem_wdata      <= 32'd0;
-            mem_wb_illegal_inst    <= 1'b0;
-            mem_wb_inst_misaligned <= 1'b0;
-            mem_wb_data_misaligned <= 1'b0;
-            mem_wb_ebreak          <= 1'b0;
-            mem_wb_next_pc         <= 32'd0;
-        end else begin
-            mem_wb_pc              <= ex_mem_pc;
-            mem_wb_inst            <= ex_mem_inst;
-            mem_wb_valid           <= ex_mem_valid;
-            mem_wb_rs1_raddr       <= ex_mem_rs1_raddr;
-            mem_wb_rs2_raddr       <= ex_mem_rs2_raddr;
-            mem_wb_rs1_rdata       <= ex_mem_rs1_rdata;
-            mem_wb_rs2_rdata       <= ex_mem_rs2_rdata;
-            mem_wb_rd_waddr        <= ex_mem_rd_waddr;
-            mem_wb_reg_write       <= ex_mem_reg_write;
-            mem_wb_alu_res         <= ex_mem_alu_res;
-            mem_wb_rdata           <= mem_rdata_processed;
-            mem_wb_mem_ren         <= o_dmem_ren;
-            mem_wb_mem_wen         <= o_dmem_wen;
-            mem_wb_dmem_addr       <= o_dmem_addr;
-            mem_wb_dmem_mask       <= o_dmem_mask;
-            mem_wb_dmem_wdata      <= o_dmem_wdata;
-            mem_wb_illegal_inst    <= ex_mem_illegal_inst;
-            mem_wb_inst_misaligned <= ex_mem_inst_misaligned;
-            mem_wb_data_misaligned <= mem_data_misaligned;
-            mem_wb_ebreak          <= ex_mem_ebreak;
-            mem_wb_next_pc         <= ex_mem_next_pc;
-        end
-    end
-
-    // =========================================================================
-    // Stage 5: Writeback (WB)
-    // =========================================================================
-    always @(*) begin
-        if (mem_wb_mem_ren) begin
-            id_wb_rf_wdata = mem_wb_rdata;
-        end else begin
-            id_wb_rf_wdata = mem_wb_alu_res;
-        end
-    end
-
-    always @(posedge i_clk) begin
-        if (!i_rst && mem_wb_valid && mem_wb_reg_write && (mem_wb_rd_waddr != 5'd0)) begin
-            rf[mem_wb_rd_waddr] <= id_wb_rf_wdata;
-        end
-    end
-
-    // =========================================================================
-    // Core Retirement Interface Assignments
-    // =========================================================================
-    assign o_retire_valid      = mem_wb_valid;
-    assign o_retire_inst       = mem_wb_inst;
-    assign o_retire_trap       = mem_wb_valid && (mem_wb_illegal_inst || mem_wb_inst_misaligned || mem_wb_data_misaligned);
-    assign o_retire_halt       = mem_wb_valid && mem_wb_ebreak;
-    assign o_retire_rs1_raddr  = mem_wb_rs1_raddr;
-    assign o_retire_rs2_raddr  = mem_wb_rs2_raddr;
-    assign o_retire_rs1_rdata  = mem_wb_rs1_rdata;
-    assign o_retire_rs2_rdata  = mem_wb_rs2_rdata;
-    assign o_retire_rd_waddr   = mem_wb_rd_waddr;
-    assign o_retire_rd_wdata   = (mem_wb_rd_waddr != 5'd0) ? id_wb_rf_wdata : 32'd0;
-    assign o_retire_dmem_addr  = mem_wb_dmem_addr;
-    assign o_retire_dmem_mask  = mem_wb_dmem_mask;
-    assign o_retire_dmem_ren   = mem_wb_mem_ren;
-    assign o_retire_dmem_wen   = mem_wb_mem_wen;
-    assign o_retire_dmem_rdata = mem_wb_rdata;
-    assign o_retire_dmem_wdata = mem_wb_dmem_wdata;
-    assign o_retire_pc         = mem_wb_pc;
-    assign o_retire_next_pc    = mem_wb_next_pc;
+    assign o_retire_dmem_addr  = memwb_dmem_addr;
+    assign o_retire_dmem_ren   = memwb_dmem_ren;
+    assign o_retire_dmem_wen   = memwb_dmem_wen;
+    assign o_retire_dmem_mask  = memwb_dmem_mask;
+    assign o_retire_dmem_wdata = memwb_dmem_wdata;
+    assign o_retire_dmem_rdata = memwb_dmem_rdata;
 
 endmodule
+
+`default_nettype wire
