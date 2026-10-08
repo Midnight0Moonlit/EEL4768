@@ -17,7 +17,7 @@ module rf #(
     // cause a single-cycle processor to behave incorrectly. You are required
     // to implement and test both modes. In phase 4, you will disable this
     // parameter, before enabling it in phase 6.
-    parameter BYPASS_EN = 1
+    parameter BYPASS_EN = 0
 ) (
     // Global clock.
     input  wire        i_clk,
@@ -43,13 +43,37 @@ module rf #(
     // at the next clock edge. When the writen enable is low, the register
     // file should remain unchanged at the clock edge.
     //
-    // Write register enable, address [0, 31] and input data.
-    // input  wire        i_rd_wen, remve this signal
+    // Write register address [0, 31] and input data.
     input  wire [ 4:0] i_rd_waddr,
     input  wire [31:0] i_rd_wdata
 );
-    // Your implementation goes under here
-    // ------------------------------------
+
+    // 32 registers, 32 bits wide
+    reg [31:0] registers [31:0];
+    integer i;
+
+    // Synchronous write & reset logic
+    always @(posedge i_clk) begin
+        if (i_rst) begin
+            for (i = 0; i < 32; i = i + 1) begin
+                registers[i] <= 32'h0000_0000;
+            end
+        end else if (i_rd_waddr != 5'd0) begin
+            // Write only if target register is not x0
+            registers[i_rd_waddr] <= i_rd_wdata;
+        end
+    end
+
+    // Combinational read logic with x0 hardwired to zero
+    wire [31:0] rs1_raw_data = (i_rs1_raddr == 5'd0) ? 32'h0000_0000 : registers[i_rs1_raddr];
+    wire [31:0] rs2_raw_data = (i_rs2_raddr == 5'd0) ? 32'h0000_0000 : registers[i_rs2_raddr];
+
+    // Optional Bypass logic (Active when BYPASS_EN = 1)
+    wire bypass_rs1 = (BYPASS_EN != 0) && (i_rd_waddr != 5'd0) && (i_rs1_raddr == i_rd_waddr);
+    wire bypass_rs2 = (BYPASS_EN != 0) && (i_rd_waddr != 5'd0) && (i_rs2_raddr == i_rd_waddr);
+
+    assign o_rs1_rdata = bypass_rs1 ? i_rd_wdata : rs1_raw_data;
+    assign o_rs2_rdata = bypass_rs2 ? i_rd_wdata : rs2_raw_data;
 
 endmodule
 
