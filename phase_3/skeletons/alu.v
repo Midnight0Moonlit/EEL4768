@@ -38,7 +38,7 @@ module alu (
     output wire        o_eq,
     // Set less than result. This is used downstream to determine if a
     // branch should be taken.
-    output wire        o_slt
+    output wire        o_slt,
 
     // phase 3: I'm adding an o_sltu since the port is needed for SLTU signal
     output wire        o_sltu
@@ -286,23 +286,25 @@ assign unsigned_lt = |lt_term;
 assign signed_lt = (i_op1[31] ^ i_op2[31]) ? i_op1[31] : unsigned_lt;
 
 // compare outputs
-assign o_eq = ~|(i_op1 ^ i_op2);
-assign o_slt = i_unsigned ? unsigned_lt : signed_lt; // phase 4: removed $signed
+assign o_eq   = (i_op1 == i_op2);
+assign o_slt  = ($signed(i_op1) < $signed(i_op2));
 
 // phase 3: compare output for SLTU
 // i_opsel == 3'b011 check that SLTU is being performed by ALU
 // if i_op1 < i_op2, unsigned_lt (comp result) is 1
 // i_op1 >= i_op2, unsigned_lt is 0 (hence 1'b0)
-assign o_sltu = (i_opsel == 3'b011) ? unsigned_lt : 1'b0; // phase 4: comparison operator removed
+assign o_sltu =
+    (i_opsel == 3'b011)
+        ? (i_op1 < i_op2)
+        : 1'b0;
+
 
 // slt/sltu results
 wire [31:0] slt_result;
-// phase 4: removed sltu wire, decoder sets i_unsigned = 0, i_unsigned now chooses sign instead of i_opsel
-//wire [31:0] sltu_result;
+wire [31:0] sltu_result;
 
 assign slt_result = {31'b0, signed_lt};
-// phase 4: removed sltu assign, same reason as sltu wire removed
-//assign sltu_result = {31'b0, unsigned_lt};
+assign sltu_result = {31'b0, unsigned_lt};
 
 // final ALU results
 //assign o_result = (i_opsel == 3'b000) ? add_result : (i_opsel == 3'b001) ? sll_16 : (i_opsel == 3'b010) ? slt_result : (i_opsel == 3'b011) ? sltu_result : (i_opsel == 3'b100) ? (i_op1 ^ i_op2) : (i_opsel == 3'b101) ? sr_16 : (i_opsel == 3'b110) ? (i_op1 | i_op2) : (i_op1 & i_op2);
@@ -312,7 +314,7 @@ assign o_result =
     (i_opsel == 3'b000) ? add_result :
     (i_opsel == 3'b001) ? sll_16 :
     (i_opsel == 3'b010) ? slt_result :
-/*    (i_opsel == 3'b011) ? sltu_result : */ // phase 4: ignore sltu_result
+    (i_opsel == 3'b011) ? sltu_result :
     (i_opsel == 3'b100) ? (i_op1 ^ i_op2) :
     (i_opsel == 3'b101) ? sr_16 :
     (i_opsel == 3'b110) ? (i_op1 | i_op2) :
