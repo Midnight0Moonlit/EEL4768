@@ -143,62 +143,72 @@ module hart #(
 `endif
 );
 
+    // Your implementation goes under here
+
     localparam [31:0] NOP = 32'h00000013;
 
-    // ----------------------------------------------------------------
+    //
     // IF stage
-    // ----------------------------------------------------------------
+    //
 
-    reg  [31:0] pc;
+    // PC Register and fetching
+    reg  [31:0] pc; // program counter
     reg         stop_fetch;
-    wire [31:0] pc_plus4;
+    wire [31:0] pc_plus4; // address of next instruction
 
     assign pc_plus4     = pc + 32'd4;
-    assign o_imem_raddr = pc;
+    assign o_imem_raddr = pc; // instruction memory address
 
-    // ----------------------------------------------------------------
+    //
     // IF/ID pipeline registers
-    // ----------------------------------------------------------------
+    //
 
     reg         ifid_valid;
     reg  [31:0] ifid_inst;
     reg  [31:0] ifid_pc;
 
-    // ----------------------------------------------------------------
+    //
     // ID stage: decoder and register file
-    // ----------------------------------------------------------------
+    //
 
-    wire        dec_legal;
-    wire        dec_halt;
+    wire        dec_legal; // high if instruction encoding is valid
+    wire        dec_halt; // high if decoder requests a halt
+
+    // decode and register read
+    // source and destination register addresses
     wire [4:0]  dec_rs1;
     wire [4:0]  dec_rs2;
     wire [4:0]  dec_rd;
-    wire [31:0] dec_imm;
 
-    wire        dec_op1_sel;
-    wire        dec_op2_sel;
+    wire [31:0] dec_imm; //extracted sign-extended immediate
+
+    wire        dec_op1_sel; // selects alu input 1
+    wire        dec_op2_sel; // selects alu input 2
+
+    //selects alu operation and gives instructions
     wire [2:0]  dec_alu_opsel;
     wire        dec_alu_sub;
     wire        dec_alu_unsigned;
     wire        dec_alu_arith;
 
-    wire        dec_branch;
-    wire        dec_jump;
+    wire        dec_branch; // high if its a branch instruction
+    wire        dec_jump; //high if its a jump
     wire        dec_branch_equal;
     wire        dec_branch_unsigned;
     wire        dec_branch_invert;
 
-    wire        dec_dmem_ren;
-    wire        dec_dmem_wen;
-    wire [1:0]  dec_dmem_align;
-    wire        dec_dmem_memb;
-    wire        dec_dmem_memh;
-    wire        dec_dmem_memw;
-    wire        dec_dmem_memu;
+    wire        dec_dmem_ren; // memory read enable
+    wire        dec_dmem_wen; // memory write enable
+    wire [1:0]  dec_dmem_align; // memory access alignment
+    wire        dec_dmem_memb; // byte wide access
+    wire        dec_dmem_memh; // half word access
+    wire        dec_dmem_memw; // word wide access
+    wire        dec_dmem_memu; // unsigned load flag
 
-    wire [3:0]  dec_rd_sel;
-    wire        dec_pc_sel;
+    wire [3:0]  dec_rd_sel; // writeback data source
+    wire        dec_pc_sel; // selects jump target
 
+    // decoder module turns the instruction into control signals
     decoder decoder_inst (
         .i_inst            (ifid_inst),
 
@@ -236,7 +246,7 @@ module hart #(
         .o_pc_sel          (dec_pc_sel)
     );
 
-    // Illegal instructions report no source-register reads.
+    // illegal instructions report no source-register reads
     wire [4:0] id_rs1_addr;
     wire [4:0] id_rs2_addr;
     wire       id_halt;
@@ -245,19 +255,22 @@ module hart #(
     assign id_rs2_addr = (ifid_valid && dec_legal) ? dec_rs2 : 5'd0;
     assign id_halt     = ifid_valid && dec_halt;
 
+    // register file
+    // data outputs from source registers
     wire [31:0] rf_rs1_data;
     wire [31:0] rf_rs2_data;
 
-    // Writeback signals are declared below and feed the register file.
+    // writeback signals feed the register file
     reg  [4:0]  memwb_rd_waddr;
     reg  [31:0] memwb_rd_wdata;
     reg         memwb_valid;
     reg         memwb_regwrite;
 
-    wire [4:0] rf_waddr;
+    wire [4:0] rf_waddr; // destination register write address
     assign rf_waddr =
         (memwb_valid && memwb_regwrite) ? memwb_rd_waddr : 5'd0;
 
+    // register file instance
     rf #(
         .BYPASS_EN(BYPASS_EN)
     ) rf_inst (
@@ -274,9 +287,9 @@ module hart #(
         .i_rd_wdata  (memwb_rd_wdata)
     );
 
-    // ----------------------------------------------------------------
+    //
     // ID/EX pipeline registers
-    // ----------------------------------------------------------------
+    //
 
     reg         idex_valid;
     reg  [31:0] idex_inst;
@@ -314,9 +327,9 @@ module hart #(
     reg         idex_dmem_memu;
     reg  [3:0]  idex_rd_sel;
 
-    // ----------------------------------------------------------------
+    //
     // EX/MEM pipeline registers
-    // ----------------------------------------------------------------
+    //
 
     reg         exmem_valid;
     reg  [31:0] exmem_inst;
@@ -346,9 +359,9 @@ module hart #(
     reg         exmem_dmem_memu;
 
 
-    // ----------------------------------------------------------------
+    //
     // EX stage: forwarding and ALU
-    // ----------------------------------------------------------------
+    //
 
     wire [31:0] mem_load_data;
     wire [31:0] mem_wb_value;
@@ -453,9 +466,9 @@ module hart #(
     assign ex_control_flush = idex_valid && ex_control_taken;
     assign ex_next_pc = ex_redirect ? ex_control_target : idex_pc4;
 
-    // ----------------------------------------------------------------
+    //
     // MEM stage: data-memory interface and writeback-value selection
-    // ----------------------------------------------------------------
+    //
 
     wire [1:0]  mem_addr_lsbs;
     wire [3:0]  mem_access_mask;
@@ -500,7 +513,7 @@ module hart #(
         exmem_rd_sel[3] ? mem_load_data :
                           32'b0;
 
-    // Forward store data from the WB stage when needed.
+    // forward store data from the WB stage when needed
     wire [31:0] mem_store_data_final;
     assign mem_store_data_final =
         (FWD_EN &&
@@ -527,9 +540,9 @@ module hart #(
         (mem_addr_lsbs == 2'b10) ? (mem_store_data_final << 16) :
                                    (mem_store_data_final << 24);
 
-    // ----------------------------------------------------------------
+    //
     // MEM/WB pipeline registers
-    // ----------------------------------------------------------------
+    //
 
     reg  [31:0] memwb_inst;
     reg  [31:0] memwb_pc;
@@ -549,9 +562,9 @@ module hart #(
     reg  [31:0] memwb_dmem_wdata;
     reg  [31:0] memwb_dmem_rdata;
 
-    // ----------------------------------------------------------------
-    // Hazard detection
-    // ----------------------------------------------------------------
+    //
+    // hazard detection
+    //
 
     wire hazard_idex_rs1;
     wire hazard_idex_rs2;
@@ -604,9 +617,9 @@ module hart #(
         !FWD_EN &&
         (hazard_idex || hazard_exmem || ((!BYPASS_EN) && hazard_memwb));
 
-    // ----------------------------------------------------------------
-    // Pipeline state updates
-    // ----------------------------------------------------------------
+    //
+    // pipeline state updates
+    //
 
     always @(posedge i_clk) begin
         if (i_rst) begin
@@ -619,7 +632,7 @@ module hart #(
             memwb_valid <= 1'b0;
         end
         else begin
-            // The older EX instruction always advances into MEM.
+            // older EX instruction always advances into MEM
             exmem_valid <= idex_valid;
             exmem_inst  <= idex_inst;
             exmem_pc    <= idex_pc;
@@ -648,7 +661,8 @@ module hart #(
             exmem_dmem_memw <= idex_dmem_memw;
             exmem_dmem_memu <= idex_dmem_memu;
 
-            // MEM advances into WB. Loads capture the word read in MEM.
+            // MEM advances into WB
+            // loads capture the word read in MEM
             memwb_valid <= exmem_valid;
             memwb_inst  <= exmem_inst;
             memwb_pc    <= exmem_pc;
@@ -676,8 +690,8 @@ module hart #(
             memwb_dmem_wdata <= o_dmem_wdata;
             memwb_dmem_rdata <= o_dmem_ren ? i_dmem_rdata : 32'b0;
 
-            // Taken control flow always flushes younger instructions.
-            // A misaligned target traps and continues at the old PC + 4.
+            // taken control flow always flushes younger instructions
+            // misaligned target traps and continues at the old PC + 4
             if (ex_control_flush) begin
                 pc <= ex_redirect ? ex_control_target : idex_pc4;
                 ifid_valid <= 1'b0;
@@ -686,7 +700,7 @@ module hart #(
                 idex_inst  <= NOP;
             end
             else if (pipeline_stall) begin
-                // Hold PC and IF/ID; insert a NOP bubble into EX.
+                // hold PC and IF/ID; insert a NOP bubble into EX
                 pc         <= pc;
                 ifid_valid <= ifid_valid;
                 ifid_inst  <= ifid_inst;
@@ -695,7 +709,7 @@ module hart #(
                 idex_inst  <= NOP;
             end
             else if (id_halt) begin
-                // Keep the ebreak in the pipeline, but discard younger work.
+                // keep the ebreak in the pipeline, but discard younger work
                 stop_fetch <= 1'b1;
                 pc         <= pc;
                 ifid_valid <= 1'b0;
@@ -741,7 +755,7 @@ module hart #(
                 idex_inst  <= NOP;
             end
             else begin
-                // Normal IF and ID advancement.
+                // normal IF and ID advancement
                 pc         <= pc_plus4;
                 ifid_valid <= 1'b1;
                 ifid_inst  <= i_imem_rdata;
@@ -788,9 +802,9 @@ module hart #(
         end
     end
 
-    // ----------------------------------------------------------------
-    // Retire interface
-    // ----------------------------------------------------------------
+    //
+    // retire interface
+    //
 
     assign o_retire_valid = memwb_valid;
     assign o_retire_inst  = memwb_inst;
