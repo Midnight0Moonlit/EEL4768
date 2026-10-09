@@ -23,8 +23,6 @@ module imm (
     // Your implementation goes under here
     // ------------------------------------
 
-    reg [31:0] immediate; // placeholder for what type it is
-
     // phase 4: one wire per format
     wire [31:0] imm_i;
     wire [31:0] imm_s;
@@ -37,7 +35,7 @@ module imm (
    assign imm_s = {{20{i_inst[31]}}, i_inst[31:25], i_inst[11:7]}; // S type
    assign imm_b = {{19{i_inst[31]}}, i_inst[31], i_inst[7], i_inst[30:25], i_inst[11:8], 1'b0}; // B type
    assign imm_u = {i_inst[31:12], 12'b0}; // U type
-   assign imm_b = {{11{i_inst[31]}}, i_inst[31], i_inst[19:12], i_inst[20], i_inst[30:21], 1'b0}; // J type
+   assign imm_j = {{11{i_inst[31]}}, i_inst[31], i_inst[19:12], i_inst[20], i_inst[30:21], 1'b0}; // J type
 
    // phase 4: select by corresponding bit fields per type
     assign o_immediate = 
