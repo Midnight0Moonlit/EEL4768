@@ -50,19 +50,19 @@ module rf #(
 
     // 32 registers, 32 bits wide
     reg [31:0] registers [31:0];
-    integer i;
 
     // Synchronous write & reset logic
-    always @(posedge i_clk) begin
-        if (i_rst) begin
-            for (i = 0; i < 32; i = i + 1) begin
-                registers[i] <= 32'h0000_0000;
+    genvar g;
+    generate
+        for (g = 0; g < 32; g = g + 1) begin : reg_gen
+            always @(posedge i_clk) begin
+                if (i_rst)
+                    registers[g] <= 32'b0;
+                else if ((g != 0) && (i_rd_waddr == g))
+                    registers[g] <= i_rd_wdata;
             end
-        end else if (i_rd_waddr != 5'd0) begin
-            // Write only if target register is not x0
-            registers[i_rd_waddr] <= i_rd_wdata;
         end
-    end
+    endgenerate
 
     // Combinational read logic with x0 hardwired to zero
     wire [31:0] rs1_raw_data = (i_rs1_raddr == 5'd0) ? 32'h0000_0000 : registers[i_rs1_raddr];
